@@ -28,6 +28,12 @@ policies are saved in /home/ferdinand/fetchrobot/unitree_rl_lab/logs/rsl_rl
 python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity 
 ``` 
 
+load one specific run
+
+```bash
+python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --load_run 2025-03-25_12-30-00_test_1
+```
+
 load one specific checkpoint
 
 ```bash
@@ -42,7 +48,10 @@ ctrl b and then keep ctrl and press d
 
 
 
+Installed things:
 sudo apt install tmux -y
+sudo apt install nvtop -y 
+sudo apt install htop -y
 
 
 
