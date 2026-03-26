@@ -1,0 +1,14 @@
+{
+    "cmake.ignoreCMakeListsMissing": true,
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "always"
+        }
+    },
+    "isort.args": ["--settings-path", "${workspaceFolder}/pyproject.toml"],
+    "flake8.args": ["--append-config", "${workspaceFolder}/.flake8"], 
+    "pyright.disableLanguageServices": false,
+    "python.analysis.indexing": true
+}
