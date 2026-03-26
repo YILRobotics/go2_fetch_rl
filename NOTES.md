@@ -14,6 +14,12 @@ conda activate isaac_lab
 python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity --headless --logger wandb --log_project_name test_example_vel_1 --run_name test_1
 ```
 
+with video
+
+```bash
+python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity --headless --logger wandb --video --video_interval 200 --video_length 400 --log_project_name test_example_vel_1 --run_name test_3leg_video_3
+```
+
 for live, dont put the --headless and define the number of envs
 
 ```bash
@@ -21,6 +27,8 @@ python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity --num_envs 32
 ```
 
 policies are saved in /home/ferdinand/fetchrobot/unitree_rl_lab/logs/rsl_rl
+
+
 
 ## Inference
 
@@ -40,6 +48,7 @@ load one specific checkpoint
 python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --checkpoint logs/rsl_rl/unitree_go2_velocity/2026-03-24_23-52-02/model_13200.pt
 ``` 
 
+## Use Background Terminal wiht TMUX
 
 tmux new -s train
 tmux ls
@@ -111,5 +120,6 @@ The foam cube in the extension is configured in
 sudo apt install tmux -y
 sudo apt install nvtop -y 
 sudo apt install htop -y
-sudo apt  install tree -y
+sudo apt install tree -y
+sudo apt install htop -y
 ```

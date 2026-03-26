@@ -152,6 +152,27 @@ def feet_contact_without_cmd(
     return reward * (command_norm < 0.1)
 
 
+def foot_contact(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    is_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0
+    return torch.any(is_contact, dim=-1).float()
+
+
+def foot_relative_height_exp(
+    env: ManagerBasedRLEnv,
+    target_foot_cfg: SceneEntityCfg,
+    reference_feet_cfg: SceneEntityCfg,
+    target_height: float,
+    std: float,
+) -> torch.Tensor:
+    asset: RigidObject = env.scene[target_foot_cfg.name]
+    target_z = asset.data.body_pos_w[:, target_foot_cfg.body_ids, 2]
+    reference_z = asset.data.body_pos_w[:, reference_feet_cfg.body_ids, 2]
+    relative_height = target_z.mean(dim=1) - reference_z.mean(dim=1)
+    error = torch.square(relative_height - target_height)
+    return torch.exp(-error / (std * std))
+
+
 def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Penalize variance in the amount of time each foot spends in the air/on the ground relative to each other"""
     # extract the used quantities (to enable type-hinting)

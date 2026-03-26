@@ -25,6 +25,33 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
+    "--camera_mode",
+    type=str,
+    default="fixed",
+    choices=["fixed", "follow"],
+    help="Camera mode used for rendering/video capture.",
+)
+parser.add_argument(
+    "--camera_eye",
+    type=float,
+    nargs=3,
+    default=[-6.0, 0.0, 5.0],
+    help="Camera eye position for fixed/follow modes.",
+)
+parser.add_argument(
+    "--camera_lookat",
+    type=float,
+    nargs=3,
+    default=[1.0, 1.0, 1.0],
+    help="Camera look-at target for fixed/follow modes.",
+)
+parser.add_argument(
+    "--camera_follow_prim",
+    type=str,
+    default="{ENV_REGEX_NS}/Robot/base",
+    help="Prim path to follow when using follow camera mode.",
+)
+parser.add_argument(
     "--use_pretrained_checkpoint",
     action="store_true",
     help="Use the pre-trained checkpoint from Nucleus.",
@@ -75,6 +102,22 @@ def main():
         entry_point_key="play_env_cfg_entry_point",
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+
+    # configure viewer/camera settings for rendering
+    if hasattr(env_cfg, "viewer"):
+        env_cfg.viewer.eye = list(args_cli.camera_eye)
+        env_cfg.viewer.lookat = list(args_cli.camera_lookat)
+        if args_cli.camera_mode == "follow":
+            follow_attr_candidates = [
+                "follow_prim_path",
+                "follow_asset_path",
+                "follow_target",
+                "follow_path",
+            ]
+            for attr_name in follow_attr_candidates:
+                if hasattr(env_cfg.viewer, attr_name):
+                    setattr(env_cfg.viewer, attr_name, args_cli.camera_follow_prim)
+                    break
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)

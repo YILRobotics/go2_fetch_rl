@@ -35,7 +35,39 @@ import cli_args  # isort: skip
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument(
+    "--video_interval",
+    type=int,
+    default=200,
+    help="Interval between video recordings (in learning iterations).",
+)
+parser.add_argument(
+    "--camera_mode",
+    type=str,
+    default="fixed",
+    choices=["fixed", "follow"],
+    help="Camera mode used for rendering/video capture.",
+)
+parser.add_argument(
+    "--camera_eye",
+    type=float,
+    nargs=3,
+    default=[-6.0, 0.0, 5.0],
+    help="Camera eye position for fixed/follow modes.",
+)
+parser.add_argument(
+    "--camera_lookat",
+    type=float,
+    nargs=3,
+    default=[1.0, 1.0, 1.0],
+    help="Camera look-at target for fixed/follow modes.",
+)
+parser.add_argument(
+    "--camera_follow_prim",
+    type=str,
+    default="{ENV_REGEX_NS}/Robot/base",
+    help="Prim path to follow when using follow camera mode.",
+)
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, choices=tasks, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -134,6 +166,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
+    # configure viewer/camera settings for rendering
+    if hasattr(env_cfg, "viewer"):
+        env_cfg.viewer.eye = list(args_cli.camera_eye)
+        env_cfg.viewer.lookat = list(args_cli.camera_lookat)
+        if args_cli.camera_mode == "follow":
+            follow_attr_candidates = [
+                "follow_prim_path",
+                "follow_asset_path",
+                "follow_target",
+                "follow_path",
+            ]
+            for attr_name in follow_attr_candidates:
+                if hasattr(env_cfg.viewer, attr_name):
+                    setattr(env_cfg.viewer, attr_name, args_cli.camera_follow_prim)
+                    break
+
     # multi-gpu training configuration
     if args_cli.distributed:
         env_cfg.sim.device = f"cuda:{app_launcher.local_rank}"
@@ -167,11 +215,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
+    video_folder = None
+
     # wrap for video recording
     if args_cli.video:
+        video_folder = os.path.join(log_dir, "videos", "train")
+        num_steps_per_env = getattr(agent_cfg, "num_steps_per_env", 1)
+        video_interval_steps = max(1, args_cli.video_interval * num_steps_per_env)
         video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "train"),
-            "step_trigger": lambda step: step % args_cli.video_interval == 0,
+            "video_folder": video_folder,
+            "step_trigger": lambda step: step % video_interval_steps == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
         }
@@ -184,6 +237,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create runner from rsl-rl
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    if args_cli.video and agent_cfg.logger == "wandb":
+        import wandb
+
+        wandb_run = getattr(wandb, "run", None)
+        wandb_save = getattr(wandb, "save", None)
+        if wandb_run is not None and callable(wandb_save) and video_folder is not None:
+            wandb_save(os.path.join(video_folder, "*.mp4"), policy="live")
+            print(f"[INFO] W&B live upload enabled for videos in: {video_folder}")
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
