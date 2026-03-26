@@ -75,7 +75,7 @@ class FetchRobot(BaseSample):
             self._stage,
             "/World/PlayCube",
             collision_simplification=True,
-            simulation_hexahedral_resolution=12,
+            simulation_hexahedral_resolution=8,
             self_collision=False,
             solver_position_iteration_count=32,
         )
@@ -95,8 +95,8 @@ class FetchRobot(BaseSample):
             material_path,
             youngs_modulus=1.0e6,
             poissons_ratio=0.35,
-            damping_scale=1.2,
-            elasticity_damping=0.005,
+            damping_scale=0.9,
+            elasticity_damping=0.002,
             dynamic_friction=0.8,
             density=10.0,
         )
