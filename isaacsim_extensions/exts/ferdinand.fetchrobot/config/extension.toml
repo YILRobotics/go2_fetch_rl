@@ -1,0 +1,14 @@
+[package]
+version = "0.1.0"
+title = "Fetch Robot"
+description = "Isaac Sim extension for Unitree Go2 fetch robot environment"
+category = "Examples"
+
+[dependencies]
+"isaacsim.examples.interactive" = {}
+"isaacsim.examples.browser" = {}
+"omni.kit.uiapp" = {}
+
+[[python.module]]
+name = "ferdinand.fetchrobot"
+path = "python"
