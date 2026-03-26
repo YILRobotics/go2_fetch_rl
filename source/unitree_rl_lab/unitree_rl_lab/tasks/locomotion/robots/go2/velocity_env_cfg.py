@@ -49,9 +49,9 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
             border_width=0.25,
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-            proportion=0.2,
+            proportion=0.1,
             grid_width=0.45,
-            grid_height_range=(0.05, 0.2),
+            grid_height_range=(0.025, 0.08),
             platform_width=2.0,
         ),
         # "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
@@ -454,7 +454,15 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
 class RobotPlayEnvCfg(RobotEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 32  #
-        self.scene.terrain.terrain_generator.num_rows = 2
-        self.scene.terrain.terrain_generator.num_cols = 1
+        self.scene.num_envs = 32
+
+        # self.scene.terrain.terrain_generator.num_rows = 1
+        # self.scene.terrain.terrain_generator.num_cols = 2
+
+        # Keep the same terrain diversity as training for evaluation in play mode.
+        self.scene.terrain.terrain_generator.num_rows = COBBLESTONE_ROAD_CFG.num_rows
+        self.scene.terrain.terrain_generator.num_cols = COBBLESTONE_ROAD_CFG.num_cols
+        self.scene.terrain.max_init_terrain_level = COBBLESTONE_ROAD_CFG.num_rows - 1
+        self.scene.terrain.terrain_generator.curriculum = False
+        
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
