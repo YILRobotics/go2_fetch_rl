@@ -33,6 +33,8 @@ import cli_args  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
+VIDEO_WIDTH = 1920
+VIDEO_HEIGHT = 1080
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument(
@@ -52,14 +54,14 @@ parser.add_argument(
     "--camera_eye",
     type=float,
     nargs=3,
-    default=[-6.0, 0.0, 5.0],
+    default=[-30.0, 64.0, 4.5],
     help="Camera eye position for fixed/follow modes.",
 )
 parser.add_argument(
     "--camera_lookat",
     type=float,
     nargs=3,
-    default=[1.0, 1.0, 1.0],
+    default=[-28.0, 0.0, -20.0],
     help="Camera look-at target for fixed/follow modes.",
 )
 parser.add_argument(
@@ -70,7 +72,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, choices=tasks, help="Name of the task.")
-parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
@@ -81,6 +83,11 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 argcomplete.autocomplete(parser)
 args_cli, hydra_args = parser.parse_known_args()
+
+if hasattr(args_cli, "width"):
+    args_cli.width = VIDEO_WIDTH
+if hasattr(args_cli, "height"):
+    args_cli.height = VIDEO_HEIGHT
 
 # always enable cameras to record video
 if args_cli.video:

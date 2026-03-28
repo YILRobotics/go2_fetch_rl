@@ -173,6 +173,31 @@ def foot_relative_height_exp(
     return torch.exp(-error / (std * std))
 
 
+def foot_air_shake_penalty(
+    env: ManagerBasedRLEnv,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    use_vertical_component: bool = False,
+) -> torch.Tensor:
+    """Penalize foot velocity while the selected foot is in air.
+
+    This is useful to reduce shaking/jittering of a manipulation leg during swing phase.
+    """
+    asset: RigidObject = env.scene[foot_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+
+    contact_time = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids]
+    in_air = (contact_time <= 0.0).float()
+
+    foot_vel_w = asset.data.body_lin_vel_w[:, foot_cfg.body_ids, :]
+    if use_vertical_component:
+        shake_speed = torch.linalg.norm(foot_vel_w, dim=2)
+    else:
+        shake_speed = torch.linalg.norm(foot_vel_w[:, :, :2], dim=2)
+
+    return torch.sum(torch.square(shake_speed) * in_air, dim=1)
+
+
 def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Penalize variance in the amount of time each foot spends in the air/on the ground relative to each other"""
     # extract the used quantities (to enable type-hinting)
