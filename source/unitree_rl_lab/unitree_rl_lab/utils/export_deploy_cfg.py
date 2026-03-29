@@ -53,15 +53,20 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
     cfg["actions"] = {}
     for action_name, action_term in action_terms:
         term_cfg = action_term.cfg.copy()
-        if isinstance(term_cfg.scale, float):
-            term_cfg.scale = [term_cfg.scale for _ in range(action_term.action_dim)]
-        else:  # dict
-            term_cfg.scale = action_term._scale[0].detach().cpu().numpy().tolist()
+        if hasattr(term_cfg, "scale"):
+            if isinstance(term_cfg.scale, float):
+                term_cfg.scale = [term_cfg.scale for _ in range(action_term.action_dim)]
+            else:  # dict or per-joint tensor assembled by action term
+                term_cfg.scale = action_term._scale[0].detach().cpu().numpy().tolist()
+        else:
+            term_cfg.scale = [1.0 for _ in range(action_term.action_dim)]
 
-        if term_cfg.clip is not None:
+        if hasattr(term_cfg, "clip") and term_cfg.clip is not None:
             term_cfg.clip = action_term._clip[0].detach().cpu().numpy().tolist()
+        elif not hasattr(term_cfg, "clip"):
+            term_cfg.clip = None
 
-        if action_name in ["JointPositionAction", "JointVelocityAction"]:
+        if action_name in ["JointPositionAction", "JointVelocityAction"] and hasattr(term_cfg, "use_default_offset"):
             if term_cfg.use_default_offset:
                 term_cfg.offset = action_term._offset[0].detach().cpu().numpy().tolist()
             else:
@@ -71,13 +76,14 @@ def export_deploy_cfg(env: ManagerBasedRLEnv, log_dir):
         term_cfg = term_cfg.to_dict()
 
         for _ in ["class_type", "asset_name", "debug_vis", "preserve_order", "use_default_offset"]:
-            del term_cfg[_]
+            term_cfg.pop(_, None)
         cfg["actions"][action_name] = term_cfg
 
-        if action_term._joint_ids == slice(None):
-            cfg["actions"][action_name]["joint_ids"] = None
-        else:
-            cfg["actions"][action_name]["joint_ids"] = action_term._joint_ids
+        if hasattr(action_term, "_joint_ids"):
+            if action_term._joint_ids == slice(None):
+                cfg["actions"][action_name]["joint_ids"] = None
+            else:
+                cfg["actions"][action_name]["joint_ids"] = action_term._joint_ids
 
     # --- observations ---
     obs_names = env.observation_manager.active_terms["policy"]
