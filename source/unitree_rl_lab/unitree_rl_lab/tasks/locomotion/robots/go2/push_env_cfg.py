@@ -28,32 +28,19 @@ from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
 
 SIM_DT = 0.005
 GOAL_XY = (0.0, 0.0)
-GOAL_RADIUS_M = 0.35
+GOAL_RADIUS_M = 0.25
 
 HIGH_LEVEL_POLICY_HZ = 15.0
 
-
 # Curriculum step parameters
-CMD_CURRICULUM_STEP_SIZE = 1200  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
+CMD_CURRICULUM_STEP_SIZE = 800  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
 CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.02
-CMD_LIMIT_LIN_VEL_X_ABS = 0.35 # Final limit
-CMD_LIMIT_LIN_VEL_Y_ABS = 0.35
+CMD_LIMIT_LIN_VEL_X_ABS = 0.4 # Final limit
+CMD_LIMIT_LIN_VEL_Y_ABS = 0.4
 CMD_LIMIT_ANG_VEL_Z_ABS = 0.25
-
-FLOOR_STATIC_FRICTION_RANGE = (1.0, 1.0)
-FLOOR_DYNAMIC_FRICTION_RANGE = (1.0, 1.0)
-
-
-def _sample_floor_friction() -> tuple[float, float]:
-    static_friction = random.uniform(FLOOR_STATIC_FRICTION_RANGE[0], FLOOR_STATIC_FRICTION_RANGE[1])
-    dynamic_friction = random.uniform(FLOOR_DYNAMIC_FRICTION_RANGE[0], FLOOR_DYNAMIC_FRICTION_RANGE[1])
-    return static_friction, min(dynamic_friction, static_friction)
-
-
-SAMPLED_FLOOR_STATIC_FRICTION, SAMPLED_FLOOR_DYNAMIC_FRICTION = _sample_floor_friction()
 
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
@@ -210,8 +197,8 @@ class RobotSceneCfg(InteractiveSceneCfg):
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
-            static_friction=SAMPLED_FLOOR_STATIC_FRICTION,
-            dynamic_friction=SAMPLED_FLOOR_DYNAMIC_FRICTION,
+            static_friction=0.80,
+            dynamic_friction=0.65,
         ),
         visual_material=sim_utils.MdlFileCfg(
             mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
@@ -230,7 +217,7 @@ class RobotSceneCfg(InteractiveSceneCfg):
             size=(0.095, 0.095, 0.095),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-            mass_props=sim_utils.MassPropertiesCfg(density=5.0),
+            mass_props=sim_utils.MassPropertiesCfg(density=60.0), # Mass is calculated from here. Range for EVA or polyurethane is 20-120 
             activate_contact_sensors=True,
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.8, 0.3)),
             physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.75, dynamic_friction=0.65, restitution=0.0),
@@ -276,12 +263,12 @@ class EventCfg:
 
     robot_physics_material = EventTerm(
         func=mdp.randomize_rigid_body_material,
-        mode="startup",
+        mode="startup", # startup: called once at the beginning of training. reset: called at every env reset.
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.5, 1.2),
-            "dynamic_friction_range": (0.4, 1.1),
-            "restitution_range": (0.0, 0.1),
+            "static_friction_range": (0.3, 1.2),
+            "dynamic_friction_range": (0.3, 1.2),
+            "restitution_range": (0.0, 0.15),
             "num_buckets": 64,
         },
     )
@@ -302,8 +289,9 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("cube"),
             "static_friction_range": (0.75, 0.95),
-            "dynamic_friction_range": (0.75, 0.85),
+            "dynamic_friction_range": (0.75, 0.95),
             "restitution_range": (0.0, 0.1),
+            "make_consistent": True,
             "num_buckets": 32,
         },
     )
@@ -313,8 +301,17 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "mass_distribution_params": (-0.10, 0.10),
+            "mass_distribution_params": (0.7, 1.30),
             "operation": "scale",
+        },
+    )
+    
+    cube_size_variation = EventTerm(
+        func=mdp.randomize_rigid_body_scale,
+        mode="prestartup",
+        params={
+            "asset_cfg": SceneEntityCfg("cube"),
+            "scale_range": (0.8, 1.3),
         },
     )
 
@@ -322,9 +319,10 @@ class EventCfg:
         func=push_mdp.set_cube_and_goal_matching_env_colors,
         mode="startup",
         params={
-            "palette_size": 32,
-            "brightness_range": (0.92, 1.08),
-            "saturation_range": (0.90, 1.10),
+            "palette_size": 12,
+            "brightness_range": (0.3, 1.2),
+            "saturation_range": (0.5, 2.0),
+            "random_seed": int(os.getenv("GO2_PUSH_COLOR_SEED", "42")),
         },
     )
 
@@ -332,9 +330,9 @@ class EventCfg:
         func=push_mdp.randomize_floor_friction_per_reset,
         mode="reset",
         params={
-            "static_friction_range": FLOOR_STATIC_FRICTION_RANGE,
-            "dynamic_friction_range": FLOOR_DYNAMIC_FRICTION_RANGE,
-            "restitution_range": (0.1, 0.1),
+            "static_friction_range": (0.70, 0.90),
+            "dynamic_friction_range": (0.55, 0.75),
+            "restitution_range": (0.02, 0.08),
             "terrain_material_prim_path": "/World/ground/terrain/physicsMaterial",
         },
     )
@@ -347,12 +345,10 @@ class EventCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_spawn_radius_range": (0.8, 2.0),
-            "cube_goal_clearance": 0.12,
-            "cube_height": 0.10,
-            "cube_yaw_range": (-3.14, 3.14),
-            "robot_spawn_radius_range": (0.45, 1.2),
-            "robot_min_distance_to_cube": 0.45,
+            "cube_spawn_radius_range": (0.8, 2.2), # min should be > goal radius to avoid spawns inside the goal
+            "cube_height": 0.12, # cube spawn height 
+            "cube_yaw_range": (-3.14, 3.14), 
+            "robot_spawn_radius_range": (0.25, 1.2), # robot is spawned in this radius around the CUBE. Min should be big enough to avoid initial robot-cube peneration. 
             "robot_yaw_range": (-3.14, 3.14),
             "robot_velocity_range": {
                 "x": (0.0, 0.0),
@@ -484,16 +480,17 @@ class RewardsCfg:
 
     cube_to_goal_progress = RewTerm(
         func=push_mdp.cube_to_goal_progress_reward,
-        weight=12.0,
+        weight=10.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
-            "transition_steps": 250_000,
+            "transition_steps": 250_000, # number of steps (from total env steps across all envs) over which to linearly transition the reward from dense to sparse.
         },
     )
+    # One time reward
     success_bonus = RewTerm(
         func=push_mdp.success_bonus_reward,
-        weight=120.0,
+        weight=25.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
@@ -509,7 +506,7 @@ class RewardsCfg:
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "vel_std": 0.12,
+            "vel_std": 0.1,
             "transition_steps": 250_000,
         },
     )
@@ -524,9 +521,20 @@ class RewardsCfg:
             "transition_steps": 250_000,
         },
     )
+    # until max_distance 0 penatly, after, linearly increasing penalty.
+    cube_to_leg_distance_penalty = RewTerm( 
+        func=push_mdp.cube_to_nearest_foot_distance_penalty,
+        weight=-4.0,
+        params={
+            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
+            "cube_cfg": SceneEntityCfg("cube"),
+            "max_distance": 0.35,
+            "transition_steps": 250_000,
+        },
+    )
     left_front_foot_contact = RewTerm(
         func=push_mdp.left_front_foot_cube_contact_reward,
-        weight=1.5,
+        weight=5.0,
         params={"sensor_cfg": SceneEntityCfg("cube_contact_forces", body_names="FL_foot.*")},
     )
     push_direction = RewTerm(

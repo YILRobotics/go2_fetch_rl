@@ -122,15 +122,15 @@ def randomize_floor_friction_per_reset(
 def set_cube_and_goal_matching_env_colors(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor | None,
-    palette_size: int = 32,
+    palette_size: int = 12,
     brightness_range: tuple[float, float] = (0.92, 1.08),
     saturation_range: tuple[float, float] = (0.90, 1.10),
     random_seed: int | None = None,
 ):
     """Assign one color per environment to both cube and goal marker.
 
-    Base hue comes from a deterministic palette. Brightness/saturation are jittered
-    per environment (small ranges) to increase visual separation between nearby hues.
+    Colors come from a compact high-contrast palette and are randomly assigned to env ids.
+    Brightness/saturation are lightly jittered per environment for extra separation.
     """
     stage = get_current_stage()
     if stage is None:
@@ -145,20 +145,45 @@ def set_cube_and_goal_matching_env_colors(
     else:
         env_indices = env_ids.to(device="cpu", dtype=torch.long).flatten()
 
-    palette_size = max(1, min(int(palette_size), num_envs))
-    palette = [colorsys.hsv_to_rgb(i / palette_size, 0.7, 0.9) for i in range(palette_size)]
+    # High-contrast base colors (fewer colors with larger differences).
+    high_contrast_palette = [
+        (0.95, 0.20, 0.20),  # red
+        (0.12, 0.55, 0.95),  # blue
+        (0.95, 0.65, 0.15),  # orange
+        (0.20, 0.78, 0.25),  # green
+        (0.80, 0.22, 0.88),  # magenta
+        (0.12, 0.82, 0.82),  # cyan
+        (0.95, 0.92, 0.18),  # yellow
+        (0.58, 0.34, 0.95),  # violet
+        (0.95, 0.35, 0.60),  # pink
+        (0.34, 0.86, 0.58),  # mint
+        (0.80, 0.45, 0.18),  # amber-brown
+        (0.25, 0.90, 0.55),  # lime
+    ]
+    palette_size = max(1, min(int(palette_size), len(high_contrast_palette)))
+    palette = high_contrast_palette[:palette_size]
 
-    for env_idx in env_indices.tolist():
-        base_color = palette[env_idx % palette_size]
-        rng = random.Random((int(random_seed) + env_idx) if random_seed is not None else None)
+    env_list = env_indices.tolist()
+    assign_rng = random.Random(random_seed)
+    shuffled_envs = list(env_list)
+    assign_rng.shuffle(shuffled_envs)
+
+    env_to_color: dict[int, tuple[float, float, float]] = {}
+    for idx, env_idx in enumerate(shuffled_envs):
+        base_color = palette[idx % palette_size]
+        seed_base = int(random_seed) if random_seed is not None else assign_rng.randint(0, 2**31 - 1)
+        rng = random.Random(seed_base * 9973 + env_idx)
 
         # Small per-env saturation/brightness jitter in HSV space.
         h, s, v = colorsys.rgb_to_hsv(*base_color)
         sat = max(0.0, min(1.0, s * rng.uniform(saturation_range[0], saturation_range[1])))
         val = max(0.0, min(1.0, v * rng.uniform(brightness_range[0], brightness_range[1])))
         r, g, b = colorsys.hsv_to_rgb(h, sat, val)
+        env_to_color[env_idx] = (r, g, b)
 
-        color = (r, g, b)
+    for env_idx in env_list:
+        color = env_to_color[env_idx]
+
         color_vec = Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))
         for prim_name in ("Cube", "GoalArea"):
             shader_prim = stage.GetPrimAtPath(f"{env.scene.env_ns}/env_{env_idx}/{prim_name}/geometry/material/Shader")
@@ -414,6 +439,22 @@ def push_direction_reward(
     return _curriculum_alpha(env, transition_steps) * torch.clamp(toward_goal_speed, min=0.0)
 
 
+def cube_to_nearest_foot_distance_penalty(
+    env: ManagerBasedRLEnv,
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*_foot.*"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    max_distance: float = 0.35,
+    transition_steps: int = 250_000,
+) -> torch.Tensor:
+    robot: Articulation = env.scene[foot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+    foot_xy = robot.data.body_pos_w[:, foot_cfg.body_ids, :2]
+    cube_xy = cube.data.root_pos_w[:, :2].unsqueeze(1)
+    nearest_foot_dist = torch.linalg.norm(foot_xy - cube_xy, dim=2).min(dim=1).values
+    excess_dist = torch.clamp(nearest_foot_dist - max_distance, min=0.0)
+    return _curriculum_alpha(env, transition_steps) * excess_dist
+
+
 def cube_goal_reached(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
@@ -435,11 +476,9 @@ def reset_robot_and_cube_uniform_around_goal(
     goal_xy: tuple[float, float] = (0.0, 0.0),
     goal_radius: float = 0.35,
     cube_spawn_radius_range: tuple[float, float] = (0.8, 2.0),
-    cube_goal_clearance: float = 0.1,
     cube_height: float = 0.10,
     cube_yaw_range: tuple[float, float] = (-3.14159, 3.14159),
     robot_spawn_radius_range: tuple[float, float] = (0.4, 1.2),
-    robot_min_distance_to_cube: float = 0.4,
     robot_yaw_range: tuple[float, float] = (-3.14159, 3.14159),
     robot_velocity_range: dict[str, tuple[float, float]] | None = None,
 ):
@@ -462,7 +501,7 @@ def reset_robot_and_cube_uniform_around_goal(
     goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
 
     # Randomize cube in an annulus around the goal and keep it outside the goal region.
-    cube_min_radius = max(cube_spawn_radius_range[0], goal_radius + cube_goal_clearance)
+    cube_min_radius = max(cube_spawn_radius_range[0], goal_radius)
     cube_max_radius = max(cube_spawn_radius_range[1], cube_min_radius + 1e-3)
     cube_radius = math_utils.sample_uniform(cube_min_radius, cube_max_radius, (num_resets,), device=device)
     cube_angle = math_utils.sample_uniform(-torch.pi, torch.pi, (num_resets,), device=device)
@@ -480,7 +519,7 @@ def reset_robot_and_cube_uniform_around_goal(
     cube.write_root_velocity_to_sim(cube_vel, env_ids=env_ids)
 
     # Randomize robot pose around the cube and keep a minimum spacing to avoid overlaps.
-    robot_min_radius = max(robot_spawn_radius_range[0], robot_min_distance_to_cube)
+    robot_min_radius = robot_spawn_radius_range[0]
     robot_max_radius = max(robot_spawn_radius_range[1], robot_min_radius + 1e-3)
     robot_radius = math_utils.sample_uniform(robot_min_radius, robot_max_radius, (num_resets,), device=device)
     robot_angle = math_utils.sample_uniform(-torch.pi, torch.pi, (num_resets,), device=device)

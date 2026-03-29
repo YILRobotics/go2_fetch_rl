@@ -25,6 +25,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
 parser.add_argument(
     "--camera_mode",
     type=str,
@@ -71,6 +72,7 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.low_level_policy_path:
     os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
+os.environ["GO2_PUSH_COLOR_SEED"] = str(args_cli.seed)
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True

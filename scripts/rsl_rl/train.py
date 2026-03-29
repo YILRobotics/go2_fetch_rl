@@ -97,6 +97,7 @@ args_cli, hydra_args = parser.parse_known_args()
 
 if args_cli.low_level_policy_path:
     os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
+os.environ["GO2_PUSH_COLOR_SEED"] = str(args_cli.seed)
 
 if hasattr(args_cli, "width"):
     args_cli.width = VIDEO_WIDTH

@@ -17,7 +17,7 @@ class PushPPORunnerCfg(BasePPORunnerCfg):
 
     # Slightly longer horizon and training budget are usually helpful for sparse-ish push objectives.
     num_steps_per_env = 32
-    max_iterations = 1000
+    max_iterations = 2000
     save_interval = 100
     experiment_name = "unitree_go2_pushcube_4l"
 
