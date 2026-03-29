@@ -28,7 +28,7 @@ conda activate isaac_lab
 python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --logger wandb --video --video_interval 200 --video_length 400 --log_project_name test_example_vel_1 --run_name test_3leg_video_3
 ```
 
-**For live:** (don't use `--headless` and define the number of envs)
+**For live:** (don't use `--headless` and set low number of envs)
 
 ```bash
 python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --num_envs 32
@@ -67,6 +67,7 @@ tmux new -s train
 # ctrl+b, then (while holding ctrl) press d to detach
 tmux ls
 tmux attach -t train
+tmux kill-session -t train
 ```
 
 <br>

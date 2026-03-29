@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import colorsys
+import random
 from typing import TYPE_CHECKING
 
 import torch
-from pxr import UsdPhysics
+from pxr import Gf, Sdf, UsdPhysics, UsdShade
 
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
@@ -117,9 +119,75 @@ def randomize_floor_friction_per_reset(
     material_api.CreateRestitutionAttr().Set(restitution)
 
 
+def set_cube_and_goal_matching_env_colors(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor | None,
+    palette_size: int = 32,
+    brightness_range: tuple[float, float] = (0.92, 1.08),
+    saturation_range: tuple[float, float] = (0.90, 1.10),
+    random_seed: int | None = None,
+):
+    """Assign one color per environment to both cube and goal marker.
+
+    Base hue comes from a deterministic palette. Brightness/saturation are jittered
+    per environment (small ranges) to increase visual separation between nearby hues.
+    """
+    stage = get_current_stage()
+    if stage is None:
+        return
+
+    num_envs = int(env.scene.num_envs)
+    if num_envs <= 0:
+        return
+
+    if env_ids is None:
+        env_indices = torch.arange(num_envs, dtype=torch.long, device="cpu")
+    else:
+        env_indices = env_ids.to(device="cpu", dtype=torch.long).flatten()
+
+    palette_size = max(1, min(int(palette_size), num_envs))
+    palette = [colorsys.hsv_to_rgb(i / palette_size, 0.7, 0.9) for i in range(palette_size)]
+
+    for env_idx in env_indices.tolist():
+        base_color = palette[env_idx % palette_size]
+        rng = random.Random((int(random_seed) + env_idx) if random_seed is not None else None)
+
+        # Small per-env saturation/brightness jitter in HSV space.
+        h, s, v = colorsys.rgb_to_hsv(*base_color)
+        sat = max(0.0, min(1.0, s * rng.uniform(saturation_range[0], saturation_range[1])))
+        val = max(0.0, min(1.0, v * rng.uniform(brightness_range[0], brightness_range[1])))
+        r, g, b = colorsys.hsv_to_rgb(h, sat, val)
+
+        color = (r, g, b)
+        color_vec = Gf.Vec3f(float(color[0]), float(color[1]), float(color[2]))
+        for prim_name in ("Cube", "GoalArea"):
+            shader_prim = stage.GetPrimAtPath(f"{env.scene.env_ns}/env_{env_idx}/{prim_name}/geometry/material/Shader")
+            if not shader_prim or not shader_prim.IsValid():
+                continue
+            shader = UsdShade.Shader(shader_prim)
+            diffuse_input = shader.GetInput("diffuseColor")
+            if not diffuse_input:
+                diffuse_input = shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f)
+            diffuse_input.Set(color_vec)
+
+
 def _goal_xy_world(env: ManagerBasedRLEnv, env_ids: torch.Tensor, goal_xy: tuple[float, float]) -> torch.Tensor:
     goal_xy_tensor = torch.tensor(goal_xy, device=env.device, dtype=torch.float32)
-    return env.scene.env_origins[env_ids, :2] + goal_xy_tensor.unsqueeze(0)
+    return _scene_env_origins_xy(env)[env_ids, :] + goal_xy_tensor.unsqueeze(0)
+
+
+def _scene_env_origins_xy(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Return per-env XY origins matching cloned env Xforms used by {ENV_REGEX_NS} assets.
+
+    With replicate_physics=False, InteractiveScene keeps cloned-grid origins in
+    `_default_env_origins`, while `scene.env_origins` may come from terrain
+    patch assignment. Push task assets (robot/cube/goal marker) are cloned under
+    env Xforms, so we anchor them to `_default_env_origins` when available.
+    """
+    default_env_origins = getattr(env.scene, "_default_env_origins", None)
+    if default_env_origins is not None:
+        return default_env_origins[:, :2]
+    return env.scene.env_origins[:, :2]
 
 
 def _cube_goal_distance(
@@ -188,7 +256,7 @@ def cube_position_xy(
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
-    return cube.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
+    return cube.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
 
 
 def cube_linear_velocity_xy(
@@ -233,7 +301,7 @@ def robot_position_xy(
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
-    return robot.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
+    return robot.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
 
 
 def robot_linear_velocity_xy(
