@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
 from importlib.metadata import version
 
 from isaaclab.app import AppLauncher
@@ -24,17 +25,54 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
+parser.add_argument(
+    "--camera_mode",
+    type=str,
+    default="fixed",
+    choices=["fixed", "follow"],
+    help="Camera mode used for rendering/video capture.",
+)
+parser.add_argument(
+    "--camera_eye",
+    type=float,
+    nargs=3,
+    default=[-6.0, 0.0, 5.0],
+    help="Camera eye position for fixed/follow modes.",
+)
+parser.add_argument(
+    "--camera_lookat",
+    type=float,
+    nargs=3,
+    default=[1.0, 1.0, 1.0],
+    help="Camera look-at target for fixed/follow modes.",
+)
+parser.add_argument(
+    "--camera_follow_prim",
+    type=str,
+    default="{ENV_REGEX_NS}/Robot/base",
+    help="Prim path to follow when using follow camera mode.",
+)
 parser.add_argument(
     "--use_pretrained_checkpoint",
     action="store_true",
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--low_level_policy_path",
+    type=str,
+    default=None,
+    help="Path to the pretrained low-level policy.pt used by push tasks.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.low_level_policy_path:
+    os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
+os.environ["GO2_PUSH_COLOR_SEED"] = str(args_cli.seed)
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -46,9 +84,9 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
-import os
 import time
 import torch
+from isaacsim.util.debug_draw import _debug_draw
 
 from rsl_rl.runners import OnPolicyRunner
 
@@ -75,6 +113,22 @@ def main():
         entry_point_key="play_env_cfg_entry_point",
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+
+    # configure viewer/camera settings for rendering
+    if hasattr(env_cfg, "viewer"):
+        env_cfg.viewer.eye = list(args_cli.camera_eye)
+        env_cfg.viewer.lookat = list(args_cli.camera_lookat)
+        if args_cli.camera_mode == "follow":
+            follow_attr_candidates = [
+                "follow_prim_path",
+                "follow_asset_path",
+                "follow_target",
+                "follow_path",
+            ]
+            for attr_name in follow_attr_candidates:
+                if hasattr(env_cfg.viewer, attr_name):
+                    setattr(env_cfg.viewer, attr_name, args_cli.camera_follow_prim)
+                    break
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -113,6 +167,11 @@ def main():
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    draw = _debug_draw.acquire_debug_draw_interface()
+    enable_goal_lines = "PushCube" in args_cli.task
+    max_debug_lines = 32
+    line_color = (1.0, 1.0, 1.0, 0.35)
+    line_width = 1.0
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
@@ -171,6 +230,17 @@ def main():
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+            if enable_goal_lines:
+                base_env = env.unwrapped
+                num_lines = min(max_debug_lines, base_env.scene.num_envs)
+                draw.clear_lines()
+                robot_pos = base_env.scene["robot"].data.root_pos_w[:num_lines, :3].detach().cpu()
+                goal_pos = base_env.scene.env_origins[:num_lines, :3].detach().cpu().clone()
+                # Slight z offset to keep line endpoint visible above the goal marker.
+                goal_pos[:, 2] += 0.03
+                starts = [tuple(p.tolist()) for p in robot_pos]
+                ends = [tuple(p.tolist()) for p in goal_pos]
+                draw.draw_lines(starts, ends, [line_color] * num_lines, [line_width] * num_lines)
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video
@@ -183,6 +253,8 @@ def main():
             time.sleep(sleep_time)
 
     # close the simulator
+    if enable_goal_lines:
+        draw.clear_lines()
     env.close()
 
 

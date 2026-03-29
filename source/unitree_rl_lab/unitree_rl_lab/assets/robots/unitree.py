@@ -9,6 +9,9 @@ Reference: https://github.com/unitreerobotics/unitree_ros
 """
 
 import os
+import re
+import shutil
+import xml.etree.ElementTree as ET
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
@@ -20,6 +23,159 @@ from unitree_rl_lab.assets.robots import unitree_actuators
 UNITREE_MODEL_DIR = "/home/ferdinand/fetchrobot/unitree_model"  # Replace with the actual path to your unitree_model directory
 UNITREE_ROS_DIR = "/home/ferdinand/fetchrobot/unitree_ros"  # Replace with the actual path to your unitree_ros package
 
+
+############# Added by Ferdinand to remove warnings when starting RL (loading the URDF in IsaacSim) #########
+
+def _sanitize_usd_identifier(name: str, fallback: str = "material") -> str:
+    """Convert arbitrary names to ASCII USD-friendly identifiers."""
+    sanitized = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    if not sanitized:
+        sanitized = fallback
+    if not re.match(r"[A-Za-z_]", sanitized[0]):
+        sanitized = f"a_{sanitized}"
+    return sanitized
+
+
+def _to_float_or_none(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
+    """Create a sanitized URDF copy to avoid noisy importer warnings."""
+    tree = ET.parse(source_urdf)
+    root = tree.getroot()
+
+    # 1) Material names with non-ASCII/hyphen characters trigger invalid USD path warnings.
+    for material in root.iter("material"):
+        name = material.get("name")
+        if not name:
+            continue
+        material.set("name", _sanitize_usd_identifier(name, fallback="material"))
+
+    # 2) Prevent fixed-joint body merges (deprecated in IsaacSim URDF importer).
+    for joint in root.iter("joint"):
+        if joint.get("type") != "fixed":
+            continue
+        if joint.get("dont_collapse") is None:
+            joint.set("dont_collapse", "true")
+
+        # Fixed joints do not use axis, but zero vectors can still trigger importer warnings.
+        axis = joint.find("axis")
+        if axis is not None and axis.get("xyz", "").strip() in {"0 0 0", "0 0 0.0", "0.0 0.0 0.0"}:
+            axis.set("xyz", "1 0 0")
+
+    # 3) Links without visuals can create unresolved /visuals/* references in generated USD.
+    # Add a tiny marker visual so importer-generated visual references always resolve.
+    for link in root.iter("link"):
+        if link.find("visual") is not None:
+            continue
+
+        visual = ET.SubElement(link, "visual")
+        ET.SubElement(visual, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+        geometry = ET.SubElement(visual, "geometry")
+        ET.SubElement(geometry, "sphere", {"radius": "0.001"})
+        ET.SubElement(visual, "material", {"name": "auto_visual_marker"})
+
+    # 4) Ensure all links have valid positive inertial values.
+    # This avoids importer warnings for missing mass or zero/invalid inertia tensors.
+    for link in root.iter("link"):
+        inertial = link.find("inertial")
+        if inertial is None:
+            inertial = ET.SubElement(link, "inertial")
+
+        origin = inertial.find("origin")
+        if origin is None:
+            ET.SubElement(inertial, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+
+        mass_el = inertial.find("mass")
+        mass_ok = False
+        if mass_el is not None:
+            mass_value = _to_float_or_none(mass_el.get("value"))
+            mass_ok = mass_value is not None and mass_value > 0.0
+        if not mass_ok:
+            if mass_el is None:
+                mass_el = ET.SubElement(inertial, "mass")
+            mass_el.set("value", "1e-6")
+
+        inertia_el = inertial.find("inertia")
+        inertia_ok = False
+        if inertia_el is not None:
+            ixx = _to_float_or_none(inertia_el.get("ixx"))
+            iyy = _to_float_or_none(inertia_el.get("iyy"))
+            izz = _to_float_or_none(inertia_el.get("izz"))
+            inertia_ok = (
+                ixx is not None
+                and iyy is not None
+                and izz is not None
+                and ixx > 0.0
+                and iyy > 0.0
+                and izz > 0.0
+            )
+        if not inertia_ok:
+            if inertia_el is None:
+                inertia_el = ET.SubElement(inertial, "inertia")
+            inertia_el.set("ixx", "1e-8")
+            inertia_el.set("iyy", "1e-8")
+            inertia_el.set("izz", "1e-8")
+            inertia_el.set("ixy", "0")
+            inertia_el.set("ixz", "0")
+            inertia_el.set("iyz", "0")
+
+    # 5) Ensure links have at least one valid collider geometry so mass properties never fall back.
+    for link in root.iter("link"):
+        has_collision_geometry = False
+        for collision in link.findall("collision"):
+            if collision.find("geometry") is not None:
+                has_collision_geometry = True
+                break
+        if has_collision_geometry:
+            continue
+        collision = ET.SubElement(link, "collision")
+        ET.SubElement(collision, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+        geometry = ET.SubElement(collision, "geometry")
+        ET.SubElement(geometry, "sphere", {"radius": "0.001"})
+
+    tree.write(target_urdf, encoding="utf-8", xml_declaration=True)
+
+
+def _prepare_sanitized_urdf_asset(source_urdf: str) -> str:
+    """Create a temporary package mirror with a sanitized URDF and shared mesh links."""
+    urdf_abs = os.path.abspath(source_urdf)
+    urdf_dir = os.path.dirname(urdf_abs)
+    package_dir = os.path.dirname(urdf_dir)
+    package_name = os.path.basename(package_dir)
+
+    tmp_root = "/tmp/IsaacLab/unitree_rl_lab/urdf_sanitized"
+    tmp_package_dir = os.path.join(tmp_root, package_name)
+    tmp_urdf_dir = os.path.join(tmp_package_dir, "urdf")
+    tmp_urdf_path = os.path.join(tmp_urdf_dir, os.path.basename(urdf_abs))
+
+    if os.path.exists(tmp_package_dir):
+        if os.path.islink(tmp_package_dir) or os.path.isfile(tmp_package_dir):
+            os.remove(tmp_package_dir)
+        else:
+            shutil.rmtree(tmp_package_dir)
+
+    os.makedirs(tmp_urdf_dir, exist_ok=True)
+
+    # Mirror all package folders except URDF via symlinks so package:// URIs still resolve.
+    for entry in os.listdir(package_dir):
+        if entry == "urdf":
+            continue
+        src = os.path.join(package_dir, entry)
+        dst = os.path.join(tmp_package_dir, entry)
+        os.symlink(src, dst)
+
+    _sanitize_urdf_copy(urdf_abs, tmp_urdf_path)
+    return tmp_urdf_path
+
+#####################################################################################
 
 @configclass
 class UnitreeArticulationCfg(ArticulationCfg):
@@ -70,6 +226,16 @@ class UnitreeUrdfFileCfg(sim_utils.UrdfFileCfg):
         max_depenetration_velocity=1.0,
     )
 
+    def __post_init__(self):
+        super().__post_init__()
+        if not self.asset_path:
+            return
+        if not self.asset_path.endswith(".urdf"):
+            return
+        if not os.path.isfile(self.asset_path):
+            return
+        self.asset_path = _prepare_sanitized_urdf_asset(self.asset_path)
+
     def replace_asset(self, meshes_dir, urdf_path):
         """Replace the asset with a temporary copy to avoid modifying the original asset.
 
@@ -80,25 +246,28 @@ class UnitreeUrdfFileCfg(sim_utils.UrdfFileCfg):
         """
         tmp_meshes_dir = "/tmp/IsaacLab/unitree_rl_lab/meshes"
         if os.path.exists(tmp_meshes_dir):
-            os.remove(tmp_meshes_dir)
+            if os.path.islink(tmp_meshes_dir) or os.path.isfile(tmp_meshes_dir):
+                os.remove(tmp_meshes_dir)
+            else:
+                shutil.rmtree(tmp_meshes_dir)
         os.makedirs("/tmp/IsaacLab/unitree_rl_lab", exist_ok=True)
         os.symlink(meshes_dir, tmp_meshes_dir)
 
         self.asset_path = "/tmp/IsaacLab/unitree_rl_lab/robot.urdf"
         if os.path.exists(self.asset_path):
             os.remove(self.asset_path)
-        os.symlink(urdf_path, self.asset_path)
+        _sanitize_urdf_copy(urdf_path, self.asset_path)
 
 
 """ Configuration for the Unitree robots."""
 
 UNITREE_GO2_CFG = UnitreeArticulationCfg(
-    # spawn=UnitreeUrdfFileCfg(
-    #     asset_path=f"{UNITREE_ROS_DIR}/robots/go2_description/urdf/go2_description.urdf",
-    # ),
-    spawn=UnitreeUsdFileCfg(
-        usd_path=f"{UNITREE_MODEL_DIR}/Go2/usd/go2.usd",
+    spawn=UnitreeUrdfFileCfg(
+        asset_path=f"{UNITREE_ROS_DIR}/robots/go2_description/urdf/go2_description.urdf",
     ),
+    # spawn=UnitreeUsdFileCfg(
+    #     usd_path=f"{UNITREE_MODEL_DIR}/Go2/usd/go2.usd",
+    # ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.4),
         joint_pos={
@@ -129,12 +298,12 @@ UNITREE_GO2_CFG = UnitreeArticulationCfg(
 )
 
 UNITREE_GO2W_CFG = UnitreeArticulationCfg(
-    # spawn=UnitreeUrdfFileCfg(
-    #     asset_path=f"{UNITREE_ROS_DIR}/robots/go2w_description/urdf/go2w_description.urdf",
-    # ),
-    spawn=UnitreeUsdFileCfg(
-        usd_path=f"{UNITREE_MODEL_DIR}/Go2W/usd/go2w.usd",
+    spawn=UnitreeUrdfFileCfg(
+        asset_path=f"{UNITREE_ROS_DIR}/robots/go2w_description/urdf/go2w_description.urdf",
     ),
+    # spawn=UnitreeUsdFileCfg(
+    #     usd_path=f"{UNITREE_MODEL_DIR}/Go2W/usd/go2w.usd",
+    # ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.45),
         joint_pos={
