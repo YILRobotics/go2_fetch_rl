@@ -28,7 +28,7 @@ from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
 
 SIM_DT = 0.005
 GOAL_XY = (0.0, 0.0)
-GOAL_RADIUS_M = 0.25
+GOAL_RADIUS_M = 0.2
 
 HIGH_LEVEL_POLICY_HZ = 15.0
 
@@ -38,9 +38,11 @@ CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.02
-CMD_LIMIT_LIN_VEL_X_ABS = 0.4 # Final limit
-CMD_LIMIT_LIN_VEL_Y_ABS = 0.4
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.25
+CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
+CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.35
+
+TRANSITION_STEPS = 50000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
@@ -240,12 +242,6 @@ class RobotSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot/.*",
         history_length=3,
         track_air_time=True,
-    )
-    cube_contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/FL_foot",
-        history_length=3,
-        track_air_time=False,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/Cube"],
     )
 
     sky_light = AssetBaseCfg(
@@ -476,76 +472,75 @@ class ObservationsCfg:
 class RewardsCfg:
     """Push task rewards with curriculum from approach to goal pushing."""
 
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
-
     cube_to_goal_progress = RewTerm(
         func=push_mdp.cube_to_goal_progress_reward,
-        weight=10.0,
+        weight=30.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
-            "transition_steps": 250_000, # number of steps (from total env steps across all envs) over which to linearly transition the reward from dense to sparse.
+            "transition_steps": TRANSITION_STEPS, # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
         },
     )
+    
     # One time reward
     success_bonus = RewTerm(
         func=push_mdp.success_bonus_reward,
-        weight=25.0,
+        weight=40.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
             "cube_speed_threshold": 0.50,
-            "transition_steps": 250_000,
         },
     )
+    
     cube_settled_in_goal = RewTerm(
         func=push_mdp.cube_settled_in_goal_reward,
-        weight=10.0,
+        weight=8.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
             "vel_std": 0.1,
-            "transition_steps": 250_000,
+            "transition_steps": TRANSITION_STEPS,
         },
     )
+    
     robot_to_cube_approach = RewTerm(
         func=push_mdp.robot_to_cube_approach_progress_reward,
-        weight=5.0,
+        weight=2.0,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "cube_far_distance": 0.7,
-            "transition_steps": 250_000,
+            "transition_steps": TRANSITION_STEPS, # this transitions down.
         },
     )
+    
     # until max_distance 0 penatly, after, linearly increasing penalty.
     cube_to_leg_distance_penalty = RewTerm( 
         func=push_mdp.cube_to_nearest_foot_distance_penalty,
-        weight=-4.0,
+        weight=-2.0,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
             "max_distance": 0.35,
-            "transition_steps": 250_000,
+            "transition_steps": TRANSITION_STEPS,
         },
     )
-    left_front_foot_contact = RewTerm(
-        func=push_mdp.left_front_foot_cube_contact_reward,
-        weight=5.0,
-        params={"sensor_cfg": SceneEntityCfg("cube_contact_forces", body_names="FL_foot.*")},
-    )
+
     push_direction = RewTerm(
         func=push_mdp.push_direction_reward,
-        weight=3.0,
+        weight=8.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
-            "transition_steps": 250_000,
+            "transition_steps": TRANSITION_STEPS,
         },
     )
+
+    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
 
     # Keep some stabilizing penalties from locomotion tasks.
     base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
@@ -559,6 +554,7 @@ class TerminationsCfg:
     """Termination conditions for push task."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    
     success = DoneTerm(
         func=push_mdp.cube_goal_reached,
         params={
@@ -568,6 +564,7 @@ class TerminationsCfg:
             "cube_speed_threshold": 0.20,
         },
     )
+    
     base_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={
@@ -575,6 +572,7 @@ class TerminationsCfg:
             "threshold": 1.0,
         },
     )
+    
     bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
 
 
@@ -593,6 +591,18 @@ class CurriculumCfg:
             "limit_lin_vel_x": CMD_LIMIT_LIN_VEL_X_ABS,
             "limit_lin_vel_y": CMD_LIMIT_LIN_VEL_Y_ABS,
             "limit_ang_vel_z": CMD_LIMIT_ANG_VEL_Z_ABS,
+        },
+    )
+    
+    common_step_counter = CurrTerm(
+        func=push_mdp.  ,
+        params={},
+    )
+    
+    goal_reward_alpha = CurrTerm(
+        func=push_mdp.curriculum_goal_reward_alpha,
+        params={
+            "transition_steps": TRANSITION_STEPS,
         },
     )
 
@@ -614,7 +624,7 @@ class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = HIGH_LEVEL_DECIMATION
-        self.episode_length_s = 40.0
+        self.episode_length_s = 35.0 # timeout time in seconds, used by mdp.time_out termination condition
 
         self.sim.dt = SIM_DT
         self.sim.render_interval = self.decimation
@@ -625,7 +635,6 @@ class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
             self.scene.terrain.terrain_generator.curriculum = False
 
         self.scene.contact_forces.update_period = self.sim.dt
-        self.scene.cube_contact_forces.update_period = self.sim.dt
 
 
 @configclass

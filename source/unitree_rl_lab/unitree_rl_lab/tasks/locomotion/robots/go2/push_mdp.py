@@ -276,6 +276,24 @@ def command_velocity_envelope_stepwise_curriculum(
     return lin_vel_abs
 
 
+def curriculum_common_step_counter(env, env_ids):
+    """Expose per-environment step progress for logger backends (TensorBoard/W&B)."""
+    del env_ids
+    return float(env.common_step_counter)
+
+
+def curriculum_goal_reward_alpha(
+    env,
+    env_ids,
+    transition_steps: int = 250_000,
+):
+    """Expose current goal curriculum alpha for logger backends (TensorBoard/W&B)."""
+    del env_ids
+    if transition_steps <= 0:
+        return 1.0
+    return min(1.0, max(0.0, float(env.common_step_counter) / float(transition_steps)))
+
+
 def cube_position_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
@@ -410,19 +428,6 @@ def robot_to_cube_approach_progress_reward(
     cube_goal_dist = _cube_goal_distance(env, cube_cfg=cube_cfg, goal_xy=goal_xy)
     gate = (cube_goal_dist > cube_far_distance).float()
     return (1.0 - _curriculum_alpha(env, transition_steps)) * gate * progress
-
-
-def left_front_foot_cube_contact_reward(
-    env: ManagerBasedRLEnv,
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("cube_contact_forces", body_names="FL_foot.*"),
-) -> torch.Tensor:
-    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-    if sensor.data.force_matrix_w is not None:
-        # Sum filtered contact magnitudes between left-front foot and cube.
-        force_mag = torch.linalg.norm(sensor.data.force_matrix_w[:, sensor_cfg.body_ids, :, :], dim=-1)
-        return (torch.sum(force_mag, dim=(1, 2)) > 1e-3).float()
-    in_contact = sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0.0
-    return torch.any(in_contact, dim=1).float()
 
 
 def push_direction_reward(

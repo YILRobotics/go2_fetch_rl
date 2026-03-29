@@ -65,7 +65,7 @@ parser.add_argument(
     type=float,
     nargs=3,
     # default=[-28.0, 0.0, -20.0],
-    default=[0.0, 0.0, -15.0],
+    default=[0.0, 0.0, -18.0],
     # default=[0.0, 0.0, 0.0], # good for 32 envs
     help="Camera look-at target for fixed/follow modes.",
 )

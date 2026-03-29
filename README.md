@@ -37,7 +37,7 @@ python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --num_envs 32
 ### Unitree-Go2-PushCube-4L Task
 
 ```bash
-python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt --headless --logger wandb --video --video_interval 75 --video_length 350 --log_project_name f_pushcube_4l --run_name test_42
+python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt --headless --logger wandb --video --video_interval 75 --video_length 300 --log_project_name f_pushcube_4l --run_name test_43
 ```
 
 #### -> policies are saved in `unitree_rl_lab/logs/rsl_rl`
