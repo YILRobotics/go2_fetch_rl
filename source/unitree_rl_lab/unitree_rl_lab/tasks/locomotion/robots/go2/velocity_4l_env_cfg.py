@@ -206,10 +206,10 @@ class CommandsCfg:
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
-        ),
+        ), # command sampling range used during normal training command generation
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
-        ),
+        ), # wider allowable envelope for the same command dimensions. For wider allowable envelope for the same command dimensions.
     )
 
 
@@ -413,7 +413,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the locomotion velocity-tracking environment."""
 
     # Scene settings
-    scene: RobotSceneCfg = RobotSceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: RobotSceneCfg = RobotSceneCfg(num_envs=4096, env_spacing=2.5) # spacing means  
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -454,7 +454,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
 class RobotPlayEnvCfg(RobotEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 32
+        self.scene.num_envs = 256
 
         # self.scene.terrain.terrain_generator.num_rows = 1
         # self.scene.terrain.terrain_generator.num_cols = 2

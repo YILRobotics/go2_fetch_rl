@@ -9,6 +9,7 @@
 
 
 import gymnasium as gym
+import os
 import pathlib
 import sys
 
@@ -54,14 +55,16 @@ parser.add_argument(
     "--camera_eye",
     type=float,
     nargs=3,
-    default=[-30.0, 64.0, 4.5],
+    # default=[-30.0, 64.0, 4.5],
+    default=[-25.0, 20.0, 4.0],
     help="Camera eye position for fixed/follow modes.",
 )
 parser.add_argument(
     "--camera_lookat",
     type=float,
     nargs=3,
-    default=[-28.0, 0.0, -20.0],
+    # default=[-28.0, 0.0, -20.0],
+    default=[-10.0, 0.0, -10.0],
     help="Camera look-at target for fixed/follow modes.",
 )
 parser.add_argument(
@@ -77,12 +80,21 @@ parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy 
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
+parser.add_argument(
+    "--low_level_policy_path",
+    type=str,
+    default=None,
+    help="Path to the pretrained low-level policy.pt used by push tasks.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 argcomplete.autocomplete(parser)
 args_cli, hydra_args = parser.parse_known_args()
+
+if args_cli.low_level_policy_path:
+    os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
 
 if hasattr(args_cli, "width"):
     args_cli.width = VIDEO_WIDTH
@@ -126,7 +138,6 @@ if args_cli.distributed and version.parse(installed_version) < version.parse(RSL
 
 import gymnasium as gym
 import inspect
-import os
 import shutil
 import torch
 from datetime import datetime

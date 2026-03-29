@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
 from importlib.metadata import version
 
 from isaaclab.app import AppLauncher
@@ -57,11 +58,19 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--low_level_policy_path",
+    type=str,
+    default=None,
+    help="Path to the pretrained low-level policy.pt used by push tasks.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.low_level_policy_path:
+    os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -73,7 +82,6 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
-import os
 import time
 import torch
 
