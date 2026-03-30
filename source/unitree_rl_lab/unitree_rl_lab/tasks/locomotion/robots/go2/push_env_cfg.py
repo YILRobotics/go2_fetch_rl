@@ -33,7 +33,7 @@ GOAL_RADIUS_M = 0.2
 HIGH_LEVEL_POLICY_HZ = 15.0
 
 # Curriculum step parameters
-CMD_CURRICULUM_STEP_SIZE = 800  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
+CMD_CURRICULUM_STEP_SIZE = 600  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
 CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
@@ -42,7 +42,7 @@ CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
 CMD_LIMIT_ANG_VEL_Z_ABS = 0.35
 
-TRANSITION_STEPS = 50000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+TRANSITION_STEPS = 35000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
@@ -478,7 +478,7 @@ class RewardsCfg:
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
-            "transition_steps": TRANSITION_STEPS, # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+            "transition_steps": TRANSITION_STEPS/2, # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
         },
     )
     
@@ -490,25 +490,40 @@ class RewardsCfg:
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.50,
+            "cube_speed_threshold": 0.05,
+            "hold_time_s": 1.0,
+            "transition_steps": TRANSITION_STEPS,
         },
     )
     
-    cube_settled_in_goal = RewTerm(
-        func=push_mdp.cube_settled_in_goal_reward,
-        weight=8.0,
+    # cube_settled_in_goal = RewTerm(
+    #     func=push_mdp.cube_settled_in_goal_reward,
+    #     weight=8.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.05,
+    #         "hold_time_s": 1.0,
+    #         "vel_std": 0.1,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
+
+    cube_in_goal = RewTerm(
+        func=push_mdp.cube_in_goal_reward,
+        weight=10.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "vel_std": 0.1,
-            "transition_steps": TRANSITION_STEPS,
+            "transition_steps": TRANSITION_STEPS/2,
         },
     )
     
     robot_to_cube_approach = RewTerm(
         func=push_mdp.robot_to_cube_approach_progress_reward,
-        weight=2.0,
+        weight=1.5,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
@@ -521,7 +536,7 @@ class RewardsCfg:
     # until max_distance 0 penatly, after, linearly increasing penalty.
     cube_to_leg_distance_penalty = RewTerm( 
         func=push_mdp.cube_to_nearest_foot_distance_penalty,
-        weight=-2.0,
+        weight=-3.0,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
@@ -532,11 +547,12 @@ class RewardsCfg:
 
     push_direction = RewTerm(
         func=push_mdp.push_direction_reward,
-        weight=8.0,
+        weight=3.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "transition_steps": TRANSITION_STEPS,
+            "speed_threshold": 0.05,
         },
     )
 
@@ -561,7 +577,8 @@ class TerminationsCfg:
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.20,
+            "cube_speed_threshold": 0.05,
+            "hold_time_s": 1.0,
         },
     )
     
@@ -595,7 +612,7 @@ class CurriculumCfg:
     )
     
     common_step_counter = CurrTerm(
-        func=push_mdp.  ,
+        func=push_mdp.curriculum_common_step_counter,
         params={},
     )
     
