@@ -309,7 +309,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "mass_distribution_params": (0.7, 1.30),
+            "mass_distribution_params": (0.5, 1.50), # min. and max. percent of original
             "operation": "scale",
         },
     )
@@ -319,7 +319,7 @@ class EventCfg:
         mode="prestartup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "scale_range": (0.8, 1.3),
+            "scale_range": (0.6, 1.8),
         },
     )
 
@@ -338,8 +338,8 @@ class EventCfg:
         func=push_mdp.randomize_floor_friction_per_reset,
         mode="reset",
         params={
-            "static_friction_range": (0.70, 0.90),
-            "dynamic_friction_range": (0.55, 0.75),
+            "static_friction_range": (0.65, 0.95),
+            "dynamic_friction_range": (0.55, 0.85),
             "restitution_range": (0.02, 0.08),
             "terrain_material_prim_path": "/World/ground/terrain/physicsMaterial",
         },
@@ -353,10 +353,10 @@ class EventCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_spawn_radius_range": (0.8, 2.2), # min should be > goal radius to avoid spawns inside the goal
+            "cube_spawn_radius_range": (0.8, 3.5), # min should be > goal radius to avoid spawns inside the goal
             "cube_height": 0.12, # cube spawn height 
             "cube_yaw_range": (-3.14, 3.14), 
-            "robot_spawn_radius_range": (0.25, 1.2), # robot is spawned in this radius around the CUBE. Min should be big enough to avoid initial robot-cube peneration. 
+            "robot_spawn_radius_range": (0.3, 2.5), # robot is spawned in this radius around the CUBE. Min should be big enough to avoid initial robot-cube peneration. 
             "robot_yaw_range": (-3.14, 3.14),
             "robot_velocity_range": {
                 "x": (0.0, 0.0),
@@ -387,7 +387,7 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(1.0e9, 1.0e9),
         rel_standing_envs=0.0,
-        debug_vis=False, # Show arrow over the robot
+        debug_vis=True, # Show arrow over the robot
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
             lin_vel_y=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),

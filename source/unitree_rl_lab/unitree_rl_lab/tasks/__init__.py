@@ -1,7 +1,5 @@
 import gymnasium as gym
 
-from isaaclab_tasks.utils import import_packages
-
 
 def _safe_register(env_id: str, kwargs: dict):
     if env_id in gym.registry:
@@ -40,6 +38,3 @@ _safe_register(
         "rsl_rl_cfg_entry_point": "unitree_rl_lab.tasks.agents.rsl_rl_push_ppo_cfg:PushPPORunnerCfg",
     },
 )
-
-# Import all configs in this package.
-import_packages(__name__, [])
