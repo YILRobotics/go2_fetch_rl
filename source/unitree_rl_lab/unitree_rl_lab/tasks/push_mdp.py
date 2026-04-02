@@ -13,6 +13,7 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sim.utils.stage import get_current_stage
 from isaaclab.sensors import ContactSensor
+from unitree_rl_lab.tasks import mdp
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -955,3 +956,117 @@ def reset_robot_and_cube_uniform_around_goal(
 
     robot.write_root_pose_to_sim(torch.cat((robot_pos, robot_quat), dim=1), env_ids=env_ids)
     robot.write_root_velocity_to_sim(robot_vel, env_ids=env_ids)
+
+
+def respawn_cube_uniform_around_goal(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_spawn_radius_range: tuple[float, float] = (0.8, 2.0),
+    cube_height: float = 0.10,
+    cube_yaw_range: tuple[float, float] = (-3.14159, 3.14159),
+):
+    """Respawn only the cube while keeping the robot state unchanged."""
+    cube: RigidObject = env.scene[cube_cfg.name]
+
+    num_resets = len(env_ids)
+    device = env.device
+    goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
+
+    cube_min_radius = max(cube_spawn_radius_range[0], goal_radius)
+    cube_max_radius = max(cube_spawn_radius_range[1], cube_min_radius + 1e-3)
+    cube_radius = math_utils.sample_uniform(cube_min_radius, cube_max_radius, (num_resets,), device=device)
+    cube_angle = math_utils.sample_uniform(-torch.pi, torch.pi, (num_resets,), device=device)
+    cube_xy = goal_xy_w + torch.stack((cube_radius * torch.cos(cube_angle), cube_radius * torch.sin(cube_angle)), dim=1)
+
+    cube_yaw = math_utils.sample_uniform(cube_yaw_range[0], cube_yaw_range[1], (num_resets,), device=device)
+    cube_quat = math_utils.quat_from_euler_xyz(
+        torch.zeros(num_resets, device=device),
+        torch.zeros(num_resets, device=device),
+        cube_yaw,
+    )
+    cube_pos = torch.cat((cube_xy, torch.full((num_resets, 1), cube_height, device=device)), dim=1)
+    cube_vel = torch.zeros((num_resets, 6), device=device)
+    cube.write_root_pose_to_sim(torch.cat((cube_pos, cube_quat), dim=1), env_ids=env_ids)
+    cube.write_root_velocity_to_sim(cube_vel, env_ids=env_ids)
+
+
+def no_op_reset(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    **kwargs,
+):
+    del env, env_ids, kwargs
+
+
+def reset_push_episode_by_termination(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_spawn_radius_range: tuple[float, float] = (0.8, 2.0),
+    cube_height: float = 0.10,
+    cube_yaw_range: tuple[float, float] = (-3.14159, 3.14159),
+    robot_spawn_radius_range: tuple[float, float] = (0.4, 1.2),
+    robot_yaw_range: tuple[float, float] = (-3.14159, 3.14159),
+    robot_velocity_range: dict[str, tuple[float, float]] | None = None,
+    joint_position_range: tuple[float, float] = (1.0, 1.0),
+    joint_velocity_range: tuple[float, float] = (-1.0, 1.0),
+):
+    """Branch push-task reset behavior by termination cause.
+
+    Success: keep the robot where it is and only respawn the cube.
+    Failure/timeout: fully reset robot pose, cube pose, and joints.
+    """
+    if isinstance(env_ids, slice):
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    elif not isinstance(env_ids, torch.Tensor):
+        env_ids = torch.as_tensor(env_ids, device=env.device, dtype=torch.long)
+    else:
+        env_ids = env_ids.to(device=env.device, dtype=torch.long)
+
+    if env_ids.numel() == 0:
+        return
+
+    success_mask = env.termination_manager.get_term("success")[env_ids]
+    success_env_ids = env_ids[success_mask]
+    failure_env_ids = env_ids[~success_mask]
+
+    if success_env_ids.numel() > 0:
+        respawn_cube_uniform_around_goal(
+            env=env,
+            env_ids=success_env_ids,
+            cube_cfg=cube_cfg,
+            goal_xy=goal_xy,
+            goal_radius=goal_radius,
+            cube_spawn_radius_range=cube_spawn_radius_range,
+            cube_height=cube_height,
+            cube_yaw_range=cube_yaw_range,
+        )
+
+    if failure_env_ids.numel() > 0:
+        reset_robot_and_cube_uniform_around_goal(
+            env=env,
+            env_ids=failure_env_ids,
+            cube_cfg=cube_cfg,
+            robot_cfg=robot_cfg,
+            goal_xy=goal_xy,
+            goal_radius=goal_radius,
+            cube_spawn_radius_range=cube_spawn_radius_range,
+            cube_height=cube_height,
+            cube_yaw_range=cube_yaw_range,
+            robot_spawn_radius_range=robot_spawn_radius_range,
+            robot_yaw_range=robot_yaw_range,
+            robot_velocity_range=robot_velocity_range,
+        )
+        mdp.reset_joints_by_scale(
+            env=env,
+            env_ids=failure_env_ids,
+            position_range=joint_position_range,
+            velocity_range=joint_velocity_range,
+            asset_cfg=robot_cfg,
+        )

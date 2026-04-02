@@ -797,3 +797,10 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
         self.scene.num_envs = 32
         self.observations.policy.enable_corruption = False
         self.observations.critic.enable_corruption = False
+
+        reset_mode = os.getenv("GO2_PUSH_PLAY_RESET_MODE", "standard").strip().lower()
+        if reset_mode == "success_keep_robot":
+            self.events.reset_robot_and_cube.func = push_mdp.reset_push_episode_by_termination
+            self.events.reset_robot_and_cube.params["joint_position_range"] = (1.0, 1.0)
+            self.events.reset_robot_and_cube.params["joint_velocity_range"] = (-1.0, 1.0)
+            self.events.reset_robot_joints.func = push_mdp.no_op_reset

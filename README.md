@@ -58,6 +58,20 @@ python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --num_envs 32
 python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --checkpoint logs/rsl_rl/unitree_go2_velocity/2026-03-24_23-52-02/model_13200.pt
 ```
 
+### Unitree-Go2-PushCube-4L Task
+
+```bash
+python scripts/rsl_rl/train.py 
+  --task Unitree-Go2-PushCube-4L \
+  --num_envs 32 \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-04-02_15-29-46_test_55/model_900.pt \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt
+  --play_reset_mode success_keep_robot
+```
+When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
+
+The push task already wraps the 4-leg velocity policy inside the push action stack in source/unitree_rl_lab/unitree_rl_lab/tasks/push_env_cfg.py:401, so Unitree-Go2-PushCube-4L runs the high-level push policy and the low-level one.
+
 ---
 
 ## Use Background Terminal with TMUX

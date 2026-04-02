@@ -65,6 +65,13 @@ parser.add_argument(
     default=None,
     help="Path to the pretrained low-level policy.pt used by push tasks.",
 )
+parser.add_argument(
+    "--play_reset_mode",
+    type=str,
+    default="standard",
+    choices=["standard", "success_keep_robot"],
+    help="Reset behavior for play mode. 'success_keep_robot' keeps the robot on success and only respawns the cube.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -73,6 +80,7 @@ args_cli = parser.parse_args()
 if args_cli.low_level_policy_path:
     os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
 os.environ["GO2_PUSH_COLOR_SEED"] = str(args_cli.seed)
+os.environ["GO2_PUSH_PLAY_RESET_MODE"] = args_cli.play_reset_mode
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
