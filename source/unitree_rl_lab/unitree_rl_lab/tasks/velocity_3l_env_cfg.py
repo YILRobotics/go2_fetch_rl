@@ -18,8 +18,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from unitree_rl_lab.assets.robots.unitree import UNITREE_GO2_CFG as ROBOT_CFG
-from unitree_rl_lab.tasks.locomotion import mdp
+from unitree_rl_lab.assets.unitree import UNITREE_GO2_CFG as ROBOT_CFG
+from unitree_rl_lab.tasks import mdp
 
 FL_FOOT_REGEX = "FL_foot.*"
 SUPPORT_FEET_REGEX = "(FR|RR|RL)_foot.*"

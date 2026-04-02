@@ -18,7 +18,7 @@ from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils import configclass
 
-from unitree_rl_lab.assets.robots import unitree_actuators
+from unitree_rl_lab.assets import unitree_actuators
 
 UNITREE_MODEL_DIR = "/home/ferdinand/fetchrobot/unitree_model"  # Replace with the actual path to your unitree_model directory
 UNITREE_ROS_DIR = "/home/ferdinand/fetchrobot/unitree_ros"  # Replace with the actual path to your unitree_ros package

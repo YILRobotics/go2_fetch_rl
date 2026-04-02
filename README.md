@@ -202,7 +202,7 @@ Currently supports Unitree **Go2**, **H1** and **G1-29dof** robots.
     ```bash
     git clone https://huggingface.co/datasets/unitreerobotics/unitree_model
     ```
-  - Config `UNITREE_MODEL_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py`.
+  - Config `UNITREE_MODEL_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/unitree.py`.
 
     ```bash
     UNITREE_MODEL_DIR = "</home/user/projects/unitree_usd>"
@@ -213,7 +213,7 @@ Currently supports Unitree **Go2**, **H1** and **G1-29dof** robots.
       ```
       git clone https://github.com/unitreerobotics/unitree_ros.git
       ```
-  - Config `UNITREE_ROS_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py`.
+  - Config `UNITREE_ROS_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/unitree.py`.
     ```bash
     UNITREE_ROS_DIR = "</home/user/projects/unitree_ros/unitree_ros>"
     ```

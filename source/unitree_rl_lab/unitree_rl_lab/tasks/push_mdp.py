@@ -850,6 +850,7 @@ def cube_goal_reached_robot_outsid_goal(
     goal_xy: tuple[float, float] = (0.0, 0.0),
     goal_radius: float = 0.35,
     cube_speed_threshold: float = 0.05,
+    cube_in_goal_additional_margin: float = 0.15,
     hold_time_s: float = 1.0,
     robot_speed_threshold: float = 0.10,
 ) -> torch.Tensor:
@@ -857,7 +858,7 @@ def cube_goal_reached_robot_outsid_goal(
         env=env,
         cube_cfg=cube_cfg,
         goal_xy=goal_xy,
-        goal_radius=goal_radius,
+        goal_radius=goal_radius - cube_in_goal_additional_margin,
         cube_speed_threshold=cube_speed_threshold,
         hold_time_s=hold_time_s,
     )

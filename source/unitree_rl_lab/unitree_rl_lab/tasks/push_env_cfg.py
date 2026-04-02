@@ -20,8 +20,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
 import isaaclab_tasks.manager_based.navigation.mdp as nav_mdp
-from unitree_rl_lab.assets.robots.unitree import UNITREE_GO2_CFG as ROBOT_CFG
-from unitree_rl_lab.tasks.locomotion import mdp
+from unitree_rl_lab.assets.unitree import UNITREE_GO2_CFG as ROBOT_CFG
+from unitree_rl_lab.tasks import mdp
 
 from . import push_mdp
 from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
@@ -105,7 +105,7 @@ def _resolve_low_level_policy_path() -> str:
     if policy_override:
         return _normalize_and_validate(Path(policy_override).expanduser().resolve())
 
-    repo_root = Path(__file__).resolve().parents[7]
+    repo_root = Path(__file__).resolve().parents[4]
     candidates = sorted(repo_root.glob("logs/rsl_rl/unitree_go2_velocity/*/exported/policy.pt"))
     if candidates:
         return _normalize_and_validate(candidates[-1].resolve())
@@ -712,6 +712,7 @@ class TerminationsCfg:
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
             "cube_speed_threshold": 0.05,
+            "cube_in_goal_additional_margin": 0.15,  # cube should be a bit more inside the goal area
             "hold_time_s": 0.5,
             "robot_speed_threshold": 0.05,
         },
