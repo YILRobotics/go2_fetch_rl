@@ -341,20 +341,136 @@ def curriculum_goal_reward_alpha(
     return min(1.0, max(0.0, float(env.common_step_counter) / float(transition_steps)))
 
 
+def _corrupt_xy_observation(
+    env: ManagerBasedRLEnv,
+    obs_xy: torch.Tensor,
+    state_prefix: str,
+    reset_mask: torch.Tensor,
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
+) -> torch.Tensor:
+    delay_steps = max(0, int(delay_steps))
+    history_len = delay_steps + 1
+
+    hist_name = f"{state_prefix}_hist"
+    prev_name = f"{state_prefix}_prev"
+    last_step_name = f"{state_prefix}_last_step"
+
+    if (
+        not hasattr(env, hist_name)
+        or getattr(env, hist_name).shape != (env.num_envs, history_len, obs_xy.shape[1])
+    ):
+        setattr(env, hist_name, obs_xy.unsqueeze(1).repeat(1, history_len, 1).clone())
+        setattr(env, prev_name, obs_xy.clone())
+        setattr(env, last_step_name, -1)
+
+    hist = getattr(env, hist_name)
+    prev_obs = getattr(env, prev_name)
+    current_step = int(env.common_step_counter)
+
+    if getattr(env, last_step_name) != current_step:
+        hist[reset_mask] = obs_xy[reset_mask].unsqueeze(1).repeat(1, history_len, 1)
+        prev_obs[reset_mask] = obs_xy[reset_mask]
+
+        if history_len > 1:
+            hist[:, 1:, :] = hist[:, :-1, :].clone()
+        hist[:, 0, :] = obs_xy
+
+        delayed_obs = hist[:, delay_steps, :].clone()
+
+        if noise_std > 0.0:
+            delayed_obs = delayed_obs + torch.randn_like(delayed_obs) * float(noise_std)
+
+        if spike_prob > 0.0 and spike_std > 0.0:
+            spike_mask = (torch.rand(env.num_envs, device=env.device) < float(spike_prob)).unsqueeze(1)
+            spike_noise = torch.randn_like(delayed_obs) * float(spike_std)
+            delayed_obs = torch.where(spike_mask, delayed_obs + spike_noise, delayed_obs)
+
+        if dropout_prob > 0.0:
+            dropout_mask = (torch.rand(env.num_envs, device=env.device) < float(dropout_prob)).unsqueeze(1)
+            delayed_obs = torch.where(dropout_mask, prev_obs, delayed_obs)
+
+        delayed_obs[reset_mask] = obs_xy[reset_mask]
+        prev_obs[:] = delayed_obs
+        setattr(env, hist_name, hist)
+        setattr(env, prev_name, prev_obs)
+        setattr(env, last_step_name, current_step)
+
+    return getattr(env, prev_name)
+
+
 def cube_position_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
-    return cube.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
+    cube_xy = cube.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
+    reset_mask = env.episode_length_buf == 0
+    return _corrupt_xy_observation(
+        env=env,
+        obs_xy=cube_xy,
+        state_prefix="_push_cube_pos_obs",
+        reset_mask=reset_mask,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        delay_steps=delay_steps,
+        spike_prob=spike_prob,
+        spike_std=spike_std,
+    )
 
-
+# Cube's linear velocity in XY plane. From previous position and velocity and current position 
 def cube_linear_velocity_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
-    return cube.data.root_lin_vel_w[:, :2]
+    cube_xy = cube.data.root_pos_w[:, :2]
+
+    if (
+        not hasattr(env, "_push_prev_cube_pos_xy_obs")
+        or env._push_prev_cube_pos_xy_obs.shape != cube_xy.shape
+    ):
+        env._push_prev_cube_pos_xy_obs = cube_xy.clone()
+        env._push_prev_cube_vel_xy_obs = torch.zeros_like(cube_xy)
+        env._push_cube_vel_obs_last_step = -1
+
+    current_step = int(env.common_step_counter)
+    if getattr(env, "_push_cube_vel_obs_last_step", -1) != current_step:
+        dt = _env_step_time_s(env) # high level policy dt (~15hz)
+        reset_mask = env.episode_length_buf == 0
+        env._push_prev_cube_pos_xy_obs[reset_mask] = cube_xy[reset_mask]
+
+        vel_xy = (cube_xy - env._push_prev_cube_pos_xy_obs) / dt
+        vel_xy[reset_mask] = 0.0
+
+        env._push_prev_cube_vel_xy_obs = vel_xy
+        env._push_prev_cube_pos_xy_obs = cube_xy.clone()
+        env._push_cube_vel_obs_last_step = current_step
+
+    return _corrupt_xy_observation(
+        env=env,
+        obs_xy=env._push_prev_cube_vel_xy_obs,
+        state_prefix="_push_cube_vel_obs",
+        reset_mask=env.episode_length_buf == 0,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        delay_steps=delay_steps,
+        spike_prob=spike_prob,
+        spike_std=spike_std,
+    )
 
 
 def goal_position_xy(env: ManagerBasedRLEnv, goal_xy: tuple[float, float] = (0.0, 0.0)) -> torch.Tensor:
@@ -442,6 +558,45 @@ def success_bonus_reward(
     return _curriculum_alpha(env, transition_steps) * is_success.float()
 
 
+def success_trigger_reward(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_speed_threshold: float = 0.05,
+    hold_time_s: float = 1.0,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    """One-shot success reward on the False->True transition of the success condition."""
+    is_success = _goal_hold_success_mask(
+        env=env,
+        cube_cfg=cube_cfg,
+        goal_xy=goal_xy,
+        goal_radius=goal_radius,
+        cube_speed_threshold=cube_speed_threshold,
+        hold_time_s=hold_time_s,
+    )
+
+    if (
+        not hasattr(env, "_push_prev_success_mask")
+        or env._push_prev_success_mask.shape[0] != env.num_envs
+    ):
+        env._push_prev_success_mask = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._push_success_trigger_flag = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._push_success_trigger_last_step = -1
+
+    current_step = int(env.common_step_counter)
+    if getattr(env, "_push_success_trigger_last_step", -1) != current_step:
+        reset_mask = env.episode_length_buf == 0
+        env._push_prev_success_mask[reset_mask] = False
+
+        env._push_success_trigger_flag = torch.logical_and(~env._push_prev_success_mask, is_success)
+        env._push_prev_success_mask = is_success.clone()
+        env._push_success_trigger_last_step = current_step
+
+    return _curriculum_alpha(env, transition_steps) * env._push_success_trigger_flag.float()
+
+
 def cube_settled_in_goal_reward(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
@@ -478,6 +633,102 @@ def cube_in_goal_reward(
     return _curriculum_alpha(env, transition_steps) * in_goal.float()
 
 
+def goal_hold_progress_reward(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_speed_threshold: float = 0.05,
+    hold_time_s: float = 1.0,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    # Ensure hold counter state is updated for this step.
+    _goal_hold_success_mask(
+        env=env,
+        cube_cfg=cube_cfg,
+        goal_xy=goal_xy,
+        goal_radius=goal_radius,
+        cube_speed_threshold=cube_speed_threshold,
+        hold_time_s=hold_time_s,
+    )
+
+    required_steps = max(1, int(math.ceil(float(hold_time_s) / _env_step_time_s(env))))
+    hold_counter = env._push_goal_hold_counter
+
+    cube: RigidObject = env.scene[cube_cfg.name]
+    dist = _cube_goal_distance(env, cube_cfg=cube_cfg, goal_xy=goal_xy)
+    speed = torch.linalg.norm(cube.data.root_lin_vel_w[:, :2], dim=1)
+    in_goal_and_slow = torch.logical_and(dist <= goal_radius, speed <= cube_speed_threshold)
+    not_yet_done = hold_counter < required_steps
+
+    return _curriculum_alpha(env, transition_steps) * torch.logical_and(in_goal_and_slow, not_yet_done).float()
+
+
+def cube_exit_goal_penalty(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    dist = _cube_goal_distance(env, cube_cfg=cube_cfg, goal_xy=goal_xy)
+    in_goal = dist <= goal_radius
+
+    if (
+        not hasattr(env, "_push_prev_in_goal")
+        or env._push_prev_in_goal.shape[0] != env.num_envs
+    ):
+        env._push_prev_in_goal = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._push_had_goal_contact = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._push_goal_exit_last_step = -1
+
+    current_step = int(env.common_step_counter)
+    if getattr(env, "_push_goal_exit_last_step", -1) != current_step:
+        reset_mask = env.episode_length_buf == 0
+        env._push_prev_in_goal[reset_mask] = False
+        env._push_had_goal_contact[reset_mask] = False
+
+        just_exited = torch.logical_and(env._push_prev_in_goal, ~in_goal)
+        exit_after_being_inside = torch.logical_and(just_exited, env._push_had_goal_contact)
+        env._push_goal_exit_flag = exit_after_being_inside
+
+        env._push_had_goal_contact = torch.logical_or(env._push_had_goal_contact, in_goal)
+        env._push_prev_in_goal = in_goal.clone()
+        env._push_goal_exit_last_step = current_step
+
+    return _curriculum_alpha(env, transition_steps) * env._push_goal_exit_flag.float()
+
+
+def robot_in_goal_area_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    margin: float = 0.05,
+    transition_steps: int = 50_000,
+    start_offset_steps: int = 0,
+) -> torch.Tensor:
+    """Penalty indicator when robot base enters goal area (with optional margin)."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
+    robot_xy_w = robot.data.root_pos_w[:, :2]
+    robot_goal_dist = torch.linalg.norm(robot_xy_w - goal_xy_w, dim=1)
+    is_inside = robot_goal_dist <= (goal_radius + margin)
+
+    current_steps = float(env.common_step_counter)
+    offset = max(0.0, float(start_offset_steps))
+    if current_steps < offset:
+        schedule = 0.0
+    else:
+        shifted_steps = current_steps - offset
+        if transition_steps <= 0:
+            schedule = 1.0
+        else:
+            schedule = min(1.0, max(0.0, shifted_steps / float(transition_steps)))
+    return torch.full((env.num_envs,), schedule, device=env.device) * is_inside.float()
+
+
 def robot_to_cube_approach_progress_reward(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
@@ -507,6 +758,8 @@ def push_direction_reward(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    goal_margin: float = 0.0,
     transition_steps: int = 50_000,
     speed_threshold: float = 0.05,
 ) -> torch.Tensor:
@@ -517,7 +770,42 @@ def push_direction_reward(
     toward_goal_speed = torch.sum(cube_vel_xy * cube_goal_dir, dim=1)
     cube_speed = torch.linalg.norm(cube_vel_xy, dim=1)
     moving_mask = (cube_speed > speed_threshold).float()
-    return _curriculum_alpha(env, transition_steps) * moving_mask * torch.clamp(toward_goal_speed, min=0.0)
+    cube_goal_dist = torch.linalg.norm(cube_goal_vec, dim=1)
+    outside_goal_mask = (cube_goal_dist > (goal_radius + goal_margin)).float()
+    return _curriculum_alpha(env, transition_steps) * moving_mask * outside_goal_mask * torch.clamp(toward_goal_speed, min=0.0)
+
+
+def forward_push_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    cube_speed_threshold: float = 0.03,
+    forward_speed_threshold: float = 0.05,
+    max_robot_cube_distance: float = 0.8,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    """Reward pushing while moving forward: robot forward speed + cube motion + proximity gate."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+
+    # Prefer body-frame forward velocity if available; otherwise fall back to world-frame x velocity.
+    robot_forward_speed = (
+        robot.data.root_lin_vel_b[:, 0]
+        if hasattr(robot.data, "root_lin_vel_b")
+        else robot.data.root_lin_vel_w[:, 0]
+    )
+    cube_speed = torch.linalg.norm(cube.data.root_lin_vel_w[:, :2], dim=1)
+
+    robot_xy = robot.data.root_pos_w[:, :2]
+    cube_xy = cube.data.root_pos_w[:, :2]
+    robot_cube_dist = torch.linalg.norm(robot_xy - cube_xy, dim=1)
+
+    cube_moving_mask = (cube_speed > cube_speed_threshold).float()
+    forward_mask = (robot_forward_speed > forward_speed_threshold).float()
+    proximity_mask = (robot_cube_dist < max_robot_cube_distance).float()
+
+    forward_push_intensity = torch.clamp(robot_forward_speed, min=0.0) * torch.clamp(cube_speed, min=0.0)
+    return _curriculum_alpha(env, transition_steps) * cube_moving_mask * forward_mask * proximity_mask * forward_push_intensity
 
 
 def cube_to_nearest_foot_distance_penalty(
@@ -552,6 +840,40 @@ def cube_goal_reached(
         cube_speed_threshold=cube_speed_threshold,
         hold_time_s=hold_time_s,
     )
+
+
+def cube_goal_reached_robot_outsid_goal(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*_foot.*"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_speed_threshold: float = 0.05,
+    hold_time_s: float = 1.0,
+    robot_speed_threshold: float = 0.10,
+) -> torch.Tensor:
+    cube_success = _goal_hold_success_mask(
+        env=env,
+        cube_cfg=cube_cfg,
+        goal_xy=goal_xy,
+        goal_radius=goal_radius,
+        cube_speed_threshold=cube_speed_threshold,
+        hold_time_s=hold_time_s,
+    )
+
+    robot: Articulation = env.scene[foot_cfg.name]
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
+    foot_xy_w = robot.data.body_pos_w[:, foot_cfg.body_ids, :2]
+    foot_goal_dist = torch.linalg.norm(foot_xy_w - goal_xy_w.unsqueeze(1), dim=2)
+    all_feet_outside_goal = torch.all(foot_goal_dist > goal_radius, dim=1)
+
+    robot_root: Articulation = env.scene[robot_cfg.name]
+    robot_speed = torch.linalg.norm(robot_root.data.root_lin_vel_w[:, :2], dim=1)
+    robot_slow = robot_speed <= robot_speed_threshold
+
+    return torch.logical_and(torch.logical_and(cube_success, all_feet_outside_goal), robot_slow)
 
 
 def reset_robot_and_cube_uniform_around_goal(

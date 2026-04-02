@@ -33,17 +33,29 @@ GOAL_RADIUS_M = 0.2
 HIGH_LEVEL_POLICY_HZ = 15.0
 
 # Curriculum step parameters
-CMD_CURRICULUM_STEP_SIZE = 600  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
+CMD_CURRICULUM_STEP_SIZE = 500  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
 CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.02
 CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.35
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.4
 
-TRANSITION_STEPS = 35000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+TRANSITION_STEPS = 20000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
+# HOLD_TIME_S = 0.7 # Time that the cube needs to be stably within the goal radius for the success reward to be granted.
+
+CUBE_POS_OBS_NOISE_STD = 0.015 # m
+CUBE_VEL_OBS_NOISE_STD = 0.08 # m/s
+CUBE_POS_OBS_DROPOUT_PROB = 0.05 
+CUBE_VEL_OBS_DROPOUT_PROB = 0.08
+CUBE_POS_OBS_DELAY_STEPS = 1
+CUBE_VEL_OBS_DELAY_STEPS = 1
+CUBE_POS_OBS_SPIKE_PROB = 0.01
+CUBE_VEL_OBS_SPIKE_PROB = 0.01
+CUBE_POS_OBS_SPIKE_STD = 0.05
+CUBE_VEL_OBS_SPIKE_STD = 0.15
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
     return max(1, int(round(1.0 / (sim_dt * policy_hz))))
@@ -375,7 +387,7 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(1.0e9, 1.0e9),
         rel_standing_envs=0.0,
-        debug_vis=True,
+        debug_vis=False, # Show arrow over the robot
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
             lin_vel_y=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
@@ -417,8 +429,26 @@ class ObservationsCfg:
 
         robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy)
         robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy)
-        cube_pos_xy = ObsTerm(func=push_mdp.cube_position_xy)
-        cube_lin_vel_xy = ObsTerm(func=push_mdp.cube_linear_velocity_xy)
+        cube_pos_xy = ObsTerm(
+            func=push_mdp.cube_position_xy,
+            params={
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
+        cube_lin_vel_xy = ObsTerm(
+            func=push_mdp.cube_linear_velocity_xy,
+            params={
+                "noise_std": CUBE_VEL_OBS_NOISE_STD,
+                "dropout_prob": CUBE_VEL_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_VEL_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_VEL_OBS_SPIKE_PROB,
+                "spike_std": CUBE_VEL_OBS_SPIKE_STD,
+            },
+        )
         goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
         goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
         cube_to_goal_xy = ObsTerm(func=push_mdp.cube_to_goal_vector_xy, params={"goal_xy": GOAL_XY})
@@ -448,8 +478,26 @@ class ObservationsCfg:
 
         robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy)
         robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy)
-        cube_pos_xy = ObsTerm(func=push_mdp.cube_position_xy)
-        cube_lin_vel_xy = ObsTerm(func=push_mdp.cube_linear_velocity_xy)
+        cube_pos_xy = ObsTerm(
+            func=push_mdp.cube_position_xy,
+            params={
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
+        cube_lin_vel_xy = ObsTerm(
+            func=push_mdp.cube_linear_velocity_xy,
+            params={
+                "noise_std": CUBE_VEL_OBS_NOISE_STD,
+                "dropout_prob": CUBE_VEL_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_VEL_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_VEL_OBS_SPIKE_PROB,
+                "spike_std": CUBE_VEL_OBS_SPIKE_STD,
+            },
+        )
         goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
         goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
         cube_to_goal_xy = ObsTerm(func=push_mdp.cube_to_goal_vector_xy, params={"goal_xy": GOAL_XY})
@@ -472,9 +520,11 @@ class ObservationsCfg:
 class RewardsCfg:
     """Push task rewards with curriculum from approach to goal pushing."""
 
+    #### REWARDS ####
+
     cube_to_goal_progress = RewTerm(
         func=push_mdp.cube_to_goal_progress_reward,
-        weight=30.0,
+        weight=25.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
@@ -482,17 +532,31 @@ class RewardsCfg:
         },
     )
     
+    # # One time reward
+    # success_bonus = RewTerm(
+    #     func=push_mdp.success_bonus_reward,
+    #     weight=40.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.0,
+    #         "hold_time_s": HOLD_TIME_S,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
+    
     # One time reward
-    success_bonus = RewTerm(
-        func=push_mdp.success_bonus_reward,
-        weight=40.0,
+    success_bonus_pretrigger = RewTerm(
+        func=push_mdp.success_trigger_reward,
+        weight=50.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.05,
-            "hold_time_s": 1.0,
-            "transition_steps": TRANSITION_STEPS,
+            "cube_speed_threshold": 0.0,
+            "hold_time_s": 0.0,
+            "transition_steps": TRANSITION_STEPS/2,
         },
     )
     
@@ -504,22 +568,36 @@ class RewardsCfg:
     #         "goal_xy": GOAL_XY,
     #         "goal_radius": GOAL_RADIUS_M,
     #         "cube_speed_threshold": 0.05,
-    #         "hold_time_s": 1.0,
+    #         "hold_time_s": HOLD_TIME_S,
     #         "vel_std": 0.1,
     #         "transition_steps": TRANSITION_STEPS,
     #     },
     # )
 
-    cube_in_goal = RewTerm(
-        func=push_mdp.cube_in_goal_reward,
-        weight=10.0,
-        params={
-            "cube_cfg": SceneEntityCfg("cube"),
-            "goal_xy": GOAL_XY,
-            "goal_radius": GOAL_RADIUS_M,
-            "transition_steps": TRANSITION_STEPS/2,
-        },
-    )
+    # Continous reward
+    # cube_in_goal = RewTerm(
+    #     func=push_mdp.cube_in_goal_reward,
+    #     weight=10.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "transition_steps": TRANSITION_STEPS/2,
+    #     },
+    # )
+
+    # goal_hold_progress = RewTerm(
+    #     func=push_mdp.goal_hold_progress_reward,
+    #     weight=2.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.05,
+    #         "hold_time_s": HOLD_TIME_S,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
     
     robot_to_cube_approach = RewTerm(
         func=push_mdp.robot_to_cube_approach_progress_reward,
@@ -532,27 +610,70 @@ class RewardsCfg:
             "transition_steps": TRANSITION_STEPS, # this transitions down.
         },
     )
-    
-    # until max_distance 0 penatly, after, linearly increasing penalty.
-    cube_to_leg_distance_penalty = RewTerm( 
-        func=push_mdp.cube_to_nearest_foot_distance_penalty,
-        weight=-3.0,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
-            "cube_cfg": SceneEntityCfg("cube"),
-            "max_distance": 0.35,
-            "transition_steps": TRANSITION_STEPS,
-        },
-    )
 
+    # just active when cube is outside the goal
     push_direction = RewTerm(
         func=push_mdp.push_direction_reward,
         weight=3.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
+            "goal_margin": 0.0,
             "transition_steps": TRANSITION_STEPS,
             "speed_threshold": 0.05,
+        },
+    )
+
+    # # rewards when robot forward moving, cube is moving and robot is close to the cube. This reward encourages the robot to move forward while pushing the cube, but only when it's effectively pushing (cube is moving) and in the right direction (robot close to cube).   
+    # forward_push = RewTerm(
+    #     func=push_mdp.forward_push_reward,
+    #     weight=0.1,
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "cube_speed_threshold": 0.03,
+    #         "forward_speed_threshold": 0.05,
+    #         "max_robot_cube_distance": 0.8,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
+    
+    #### PENATLIES ####
+    
+    # until max_distance 0 penatly, after, linearly increasing penalty.
+    cube_to_leg_distance_penalty = RewTerm( 
+        func=push_mdp.cube_to_nearest_foot_distance_penalty,
+        weight=-4.0,
+        params={
+            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
+            "cube_cfg": SceneEntityCfg("cube"),
+            "max_distance": 0.2,
+            "transition_steps": TRANSITION_STEPS,
+        },
+    )
+    
+    goal_exit_penalty = RewTerm(
+        func=push_mdp.cube_exit_goal_penalty,
+        weight=-15.0,
+        params={
+            "cube_cfg": SceneEntityCfg("cube"),
+            "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
+            "transition_steps": TRANSITION_STEPS,
+        },
+    )
+
+    robot_in_goal_area = RewTerm(
+        func=push_mdp.robot_in_goal_area_penalty,
+        weight=-8.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
+            "margin": 0.35, # robot radius from base
+            "transition_steps": TRANSITION_STEPS,
+            "start_offset_steps": 0,
         },
     )
 
@@ -571,14 +692,28 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     
+    # success = DoneTerm(
+    #     func=push_mdp.cube_goal_reached,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.05,
+    #         "hold_time_s": 1.0,
+    #     },
+    # )
+
     success = DoneTerm(
-        func=push_mdp.cube_goal_reached,
+        func=push_mdp.cube_goal_reached_robot_outsid_goal,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
+            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
+            "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
             "cube_speed_threshold": 0.05,
-            "hold_time_s": 1.0,
+            "hold_time_s": 0.5,
+            "robot_speed_threshold": 0.05,
         },
     )
     
@@ -641,7 +776,7 @@ class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = HIGH_LEVEL_DECIMATION
-        self.episode_length_s = 35.0 # timeout time in seconds, used by mdp.time_out termination condition
+        self.episode_length_s = 25.0 # timeout time in seconds, used by mdp.time_out termination condition
 
         self.sim.dt = SIM_DT
         self.sim.render_interval = self.decimation
