@@ -199,8 +199,8 @@ def set_cube_and_goal_matching_env_colors(
 
 
 def _goal_xy_world(env: ManagerBasedRLEnv, env_ids: torch.Tensor, goal_xy: tuple[float, float]) -> torch.Tensor:
-    goal_xy_tensor = torch.tensor(goal_xy, device=env.device, dtype=torch.float32)
-    return _scene_env_origins_xy(env)[env_ids, :] + goal_xy_tensor.unsqueeze(0)
+    goal_xy_tensor = _cached_goal_xy_vector(env, goal_xy)
+    return _scene_env_origins_xy(env)[env_ids, :] + goal_xy_tensor
 
 
 def _scene_env_origins_xy(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -217,13 +217,47 @@ def _scene_env_origins_xy(env: ManagerBasedRLEnv) -> torch.Tensor:
     return env.scene.env_origins[:, :2]
 
 
+def _cached_env_ids(env: ManagerBasedRLEnv) -> torch.Tensor:
+    device = env.device if isinstance(env.device, torch.device) else torch.device(env.device)
+    cached = getattr(env, "_push_cached_env_ids", None)
+    if cached is None or cached.shape[0] != env.num_envs or cached.device != device:
+        cached = torch.arange(env.num_envs, device=device, dtype=torch.long)
+        env._push_cached_env_ids = cached
+    return cached
+
+
+def _cached_goal_xy_vector(env: ManagerBasedRLEnv, goal_xy: tuple[float, float]) -> torch.Tensor:
+    device = env.device if isinstance(env.device, torch.device) else torch.device(env.device)
+    goal_xy_key = (float(goal_xy[0]), float(goal_xy[1]))
+    cache_key = getattr(env, "_push_goal_xy_vector_key", None)
+    cached = getattr(env, "_push_goal_xy_vector", None)
+    if cached is None or cache_key != (goal_xy_key, device.type, device.index) or cached.device != device:
+        cached = torch.tensor(goal_xy_key, device=device, dtype=torch.float32)
+        env._push_goal_xy_vector = cached
+        env._push_goal_xy_vector_key = (goal_xy_key, device.type, device.index)
+    return cached
+
+
+def _cached_goal_radius_obs(env: ManagerBasedRLEnv, goal_radius: float) -> torch.Tensor:
+    device = env.device if isinstance(env.device, torch.device) else torch.device(env.device)
+    radius = float(goal_radius)
+    cache_key = getattr(env, "_push_goal_radius_obs_key", None)
+    cached = getattr(env, "_push_goal_radius_obs", None)
+    expected_key = (radius, env.num_envs, device.type, device.index)
+    if cached is None or cache_key != expected_key or cached.device != device:
+        cached = torch.full((env.num_envs, 1), radius, device=device)
+        env._push_goal_radius_obs = cached
+        env._push_goal_radius_obs_key = expected_key
+    return cached
+
+
 def _cube_goal_distance(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg,
     goal_xy: tuple[float, float],
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
-    env_ids = torch.arange(env.num_envs, device=env.device)
+    env_ids = _cached_env_ids(env)
     goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
     cube_xy_w = cube.data.root_pos_w[:, :2]
     return torch.linalg.norm(cube_xy_w - goal_xy_w, dim=1)
@@ -275,12 +309,10 @@ def _goal_hold_success_mask(
     return env._push_goal_hold_counter >= required_steps
 
 
-def _curriculum_alpha(env: ManagerBasedRLEnv, transition_steps: int) -> torch.Tensor:
+def _curriculum_alpha(env: ManagerBasedRLEnv, transition_steps: int) -> float:
     if transition_steps <= 0:
-        value = 1.0
-    else:
-        value = min(1.0, max(0.0, float(env.common_step_counter) / float(transition_steps)))
-    return torch.full((env.num_envs,), value, device=env.device)
+        return 1.0
+    return min(1.0, max(0.0, float(env.common_step_counter) / float(transition_steps)))
 
 
 def _symmetric_curriculum_range(limit_range: tuple[float, float], initial_abs: float, alpha: float) -> list[float]:
@@ -302,8 +334,15 @@ def command_velocity_envelope_stepwise_curriculum(
     limit_lin_vel_x: float = 0.6,
     limit_lin_vel_y: float = 0.5,
     limit_ang_vel_z: float = 0.3,
+    scale_back_vel: float = 1.0,
+    scale_side_vel: float = 1.0,
 ):
-    """Increase command velocity limits in steps after every step_size steps."""
+    """Increase command velocity limits in steps after every step_size steps.
+
+    Supports asymmetric envelopes:
+    - backward speed can be scaled via ``scale_back_vel`` for x-command
+    - lateral speed can be scaled via ``scale_side_vel`` for y-command
+    """
     del env_ids
     command_term = env.command_manager.get_term("base_velocity")
     ranges = command_term.cfg.ranges
@@ -312,16 +351,19 @@ def command_velocity_envelope_stepwise_curriculum(
     # Number of increments so far
     n_increments = int(env.common_step_counter // step_size)
     # Compute new abs limits
-    lin_vel_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_x)
+    lin_vel_x_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_x)
+    lin_vel_y_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_y)
     ang_vel_abs = min(initial_ang_vel_abs + n_increments * ang_vel_increment, limit_ang_vel_z)
+    back_scale = max(0.0, float(scale_back_vel))
+    side_scale = max(0.0, float(scale_side_vel))
 
-    # Set symmetric ranges
-    ranges.lin_vel_x = [-lin_vel_abs, lin_vel_abs]
-    ranges.lin_vel_y = [-lin_vel_abs, lin_vel_abs]  # Use same increment for y
+    # Set ranges (supports asymmetric backward / lateral scaling).
+    ranges.lin_vel_x = [-lin_vel_x_abs * back_scale, lin_vel_x_abs]
+    ranges.lin_vel_y = [-lin_vel_y_abs * side_scale, lin_vel_y_abs * side_scale]
     ranges.ang_vel_z = [-ang_vel_abs, ang_vel_abs]
 
     # For logging: return the current increment
-    return lin_vel_abs
+    return lin_vel_x_abs
 
 
 def curriculum_common_step_counter(env, env_ids):
@@ -475,12 +517,12 @@ def cube_linear_velocity_xy(
 
 
 def goal_position_xy(env: ManagerBasedRLEnv, goal_xy: tuple[float, float] = (0.0, 0.0)) -> torch.Tensor:
-    goal_xy_tensor = torch.tensor(goal_xy, device=env.device, dtype=torch.float32)
-    return goal_xy_tensor.unsqueeze(0).repeat(env.num_envs, 1)
+    goal_xy_tensor = _cached_goal_xy_vector(env, goal_xy)
+    return goal_xy_tensor.unsqueeze(0).expand(env.num_envs, -1)
 
 
 def goal_radius_obs(env: ManagerBasedRLEnv, goal_radius: float) -> torch.Tensor:
-    return torch.full((env.num_envs, 1), goal_radius, device=env.device)
+    return _cached_goal_radius_obs(env, goal_radius)
 
 
 def cube_to_goal_vector_xy(
@@ -784,7 +826,7 @@ def robot_in_goal_area_penalty(
 ) -> torch.Tensor:
     """Penalty indicator when robot base enters goal area (with optional margin)."""
     robot: Articulation = env.scene[robot_cfg.name]
-    env_ids = torch.arange(env.num_envs, device=env.device)
+    env_ids = _cached_env_ids(env)
     goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
     robot_xy_w = robot.data.root_pos_w[:, :2]
     robot_goal_dist = torch.linalg.norm(robot_xy_w - goal_xy_w, dim=1)
@@ -800,7 +842,7 @@ def robot_in_goal_area_penalty(
             schedule = 1.0
         else:
             schedule = min(1.0, max(0.0, shifted_steps / float(transition_steps)))
-    return torch.full((env.num_envs,), schedule, device=env.device) * is_inside.float()
+    return is_inside.float() * schedule
 
 
 def robot_stop_after_goal_reward(
@@ -958,7 +1000,7 @@ def cube_goal_reached_robot_outsid_goal(
     )
 
     robot: Articulation = env.scene[foot_cfg.name]
-    env_ids = torch.arange(env.num_envs, device=env.device)
+    env_ids = _cached_env_ids(env)
     goal_xy_w = _goal_xy_world(env, env_ids, goal_xy)
     foot_xy_w = robot.data.body_pos_w[:, foot_cfg.body_ids, :2]
     foot_goal_dist = torch.linalg.norm(foot_xy_w - goal_xy_w.unsqueeze(1), dim=2)

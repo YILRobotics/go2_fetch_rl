@@ -204,8 +204,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env_cfg.viewer.eye = [-60.0, 0.0, 7.0]
             env_cfg.viewer.lookat = [0.0, 0.0, -14]
         else:
-            env_cfg.viewer.eye = [-70.0, -30.0, 10.0]
-            env_cfg.viewer.lookat = [0.0, 0.0, -25]
+            env_cfg.viewer.eye = [-55.0, -25.0, 10.0]
+            env_cfg.viewer.lookat = [0.0, 0.0, -15]
         # env_cfg.viewer.eye = list(args_cli.camera_eye)
         # env_cfg.viewer.lookat = list(args_cli.camera_lookat)
         if args_cli.camera_mode == "follow":

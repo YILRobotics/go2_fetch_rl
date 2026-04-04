@@ -72,6 +72,20 @@ parser.add_argument(
     choices=["standard", "success_keep_robot"],
     help="Reset behavior for play mode. 'success_keep_robot' keeps the robot on success and only respawns the cube.",
 )
+
+# Terrain
+parser.add_argument(
+    "--terrain_rows",
+    type=int,
+    default=3,
+    help="Override terrain-generator row count used in play mode.",
+)
+parser.add_argument(
+    "--terrain_cols",
+    type=int,
+    default=3,
+    help="Override terrain-generator column count used in play mode.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -109,6 +123,35 @@ import unitree_rl_lab.tasks  # noqa: F401
 from unitree_rl_lab.utils.parser_cfg import parse_env_cfg
 
 
+def _apply_play_terrain_overrides(env_cfg):
+    """Apply optional terrain-generator overrides from CLI for play runs."""
+    if args_cli.terrain_rows is None and args_cli.terrain_cols is None:
+        return
+
+    scene_cfg = getattr(env_cfg, "scene", None)
+    terrain_cfg = getattr(scene_cfg, "terrain", None) if scene_cfg is not None else None
+    terrain_generator_cfg = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
+    if terrain_cfg is None or terrain_generator_cfg is None:
+        print("[WARN] Terrain overrides ignored: task does not use a terrain generator.")
+        return
+
+    if args_cli.terrain_rows is not None:
+        if args_cli.terrain_rows < 1:
+            raise ValueError(f"--terrain_rows must be >= 1, got {args_cli.terrain_rows}")
+        terrain_generator_cfg.num_rows = args_cli.terrain_rows
+
+    if args_cli.terrain_cols is not None:
+        if args_cli.terrain_cols < 1:
+            raise ValueError(f"--terrain_cols must be >= 1, got {args_cli.terrain_cols}")
+        terrain_generator_cfg.num_cols = args_cli.terrain_cols
+
+    print(
+        "[INFO] Applied terrain overrides: "
+        f"rows={terrain_generator_cfg.num_rows}, "
+        f"cols={terrain_generator_cfg.num_cols}"
+    )
+
+
 def main():
     """Play with RSL-RL agent."""
     # parse configuration
@@ -119,6 +162,7 @@ def main():
         use_fabric=not args_cli.disable_fabric,
         entry_point_key="play_env_cfg_entry_point",
     )
+    _apply_play_terrain_overrides(env_cfg)
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
     # configure viewer/camera settings for rendering

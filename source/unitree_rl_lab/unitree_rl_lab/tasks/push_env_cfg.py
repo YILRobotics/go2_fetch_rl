@@ -42,6 +42,9 @@ CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
 CMD_LIMIT_ANG_VEL_Z_ABS = 0.4
 
+SCALE_BACK_VEL = 0.1
+SCALE_SIDE_VEL = 0.3
+
 TRANSITION_STEPS = 10000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
 SUCCESS_CUBE_SPEED_THRESHOLD = 0.05
@@ -152,36 +155,36 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
 )
 
 
-PUSH_MIXED_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(8.0, 8.0),
-    border_width=10.0,
-    num_rows=8,
-    num_cols=3,
-    horizontal_scale=0.1,
-    vertical_scale=0.005,
-    slope_threshold=0.75,
-    difficulty_range=(0.0, 1.0),
-    use_cache=False,
-    sub_terrains={
-        # flat
-        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.34),
-        # slanted
-        "sloped": terrain_gen.HfPyramidSlopedTerrainCfg(
-            proportion=0.33,
-            slope_range=(0.0, 0.005),
-            platform_width=2.2,
-            border_width=0.2,
-        ),
-        # slightly uneven
-        "slightly_uneven": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.33, # means approximately 1-2 patches of noise per 1 patch of slope
-            # Keep values aligned with vertical_scale=0.005 to avoid zero height-step quantization.
-            noise_range=(0.001, 0.005),
-            noise_step=0.005, # multiple of vertical_scale to avoid zero height-step quantization
-            border_width=0.2,
-        ),
-    },
-)
+# PUSH_MIXED_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
+#     size=(8.0, 8.0),
+#     border_width=10.0,
+#     num_rows=8,
+#     num_cols=3,
+#     horizontal_scale=0.1,
+#     vertical_scale=0.005,
+#     slope_threshold=0.75,
+#     difficulty_range=(0.0, 1.0),
+#     use_cache=False,
+#     sub_terrains={
+#         # flat
+#         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.34),
+#         # slanted
+#         "sloped": terrain_gen.HfPyramidSlopedTerrainCfg(
+#             proportion=0.33,
+#             slope_range=(0.0, 0.005),
+#             platform_width=2.2,
+#             border_width=0.2,
+#         ),
+#         # slightly uneven
+#         "slightly_uneven": terrain_gen.HfRandomUniformTerrainCfg(
+#             proportion=0.33, # means approximately 1-2 patches of noise per 1 patch of slope
+#             # Keep values aligned with vertical_scale=0.005 to avoid zero height-step quantization.
+#             noise_range=(0.001, 0.005),
+#             noise_step=0.005, # multiple of vertical_scale to avoid zero height-step quantization
+#             border_width=0.2,
+#         ),
+#     },
+# )
 
 
 @configclass
@@ -392,13 +395,13 @@ class CommandsCfg:
         rel_standing_envs=0.0,
         debug_vis=False, # Show velocity arrow over the robot
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
-            lin_vel_y=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
+            lin_vel_x=(-CMD_INIT_LIN_VEL_ABS*SCALE_BACK_VEL, CMD_INIT_LIN_VEL_ABS), # forward / backward
+            lin_vel_y=(-CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL, CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL), # left / right
             ang_vel_z=(-CMD_INIT_ANG_VEL_ABS, CMD_INIT_ANG_VEL_ABS),
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-CMD_LIMIT_LIN_VEL_X_ABS, CMD_LIMIT_LIN_VEL_X_ABS),
-            lin_vel_y=(-CMD_LIMIT_LIN_VEL_Y_ABS, CMD_LIMIT_LIN_VEL_Y_ABS),
+            lin_vel_x=(-CMD_LIMIT_LIN_VEL_X_ABS*SCALE_BACK_VEL, CMD_LIMIT_LIN_VEL_X_ABS),
+            lin_vel_y=(-CMD_LIMIT_LIN_VEL_Y_ABS*SCALE_SIDE_VEL, CMD_LIMIT_LIN_VEL_Y_ABS*SCALE_SIDE_VEL),
             ang_vel_z=(-CMD_LIMIT_ANG_VEL_Z_ABS, CMD_LIMIT_ANG_VEL_Z_ABS),
         ),
     )
@@ -754,6 +757,7 @@ class TerminationsCfg:
 class CurriculumCfg:
     """Curriculum terms for push command magnitudes (stepwise increments)."""
 
+    # Overrides Settings set in CommandsCfg
     command_velocity_envelope = CurrTerm(
         func=push_mdp.command_velocity_envelope_stepwise_curriculum,
         params={
@@ -765,6 +769,8 @@ class CurriculumCfg:
             "limit_lin_vel_x": CMD_LIMIT_LIN_VEL_X_ABS,
             "limit_lin_vel_y": CMD_LIMIT_LIN_VEL_Y_ABS,
             "limit_ang_vel_z": CMD_LIMIT_ANG_VEL_Z_ABS,
+            "scale_back_vel": SCALE_BACK_VEL,
+            "scale_side_vel": SCALE_SIDE_VEL,
         },
     )
     
