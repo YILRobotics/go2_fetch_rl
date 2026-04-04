@@ -13,56 +13,15 @@ with `Unitree` in their name.
 
 import importlib
 import pathlib
-import pkgutil
 import sys
 
 
-def _walk_packages(
-    path: str | None = None,
-    prefix: str = "",
-    onerror=None,
-):
-    """Yields ModuleInfo for all modules recursively on path, or, if path is None, all accessible modules.
-
-    Note:
-        This function is a modified version of the original ``pkgutil.walk_packages`` function. Please refer to the original
-        ``pkgutil.walk_packages`` function for more details.
-    """
-
-    def seen(p, m={}):
-        if p in m:
-            return True
-        m[p] = True  # noqa: R503
-
-    for info in pkgutil.iter_modules(path, prefix):
-
-        # yield the module info
-        yield info
-
-        if info.ispkg:
-            try:
-                __import__(info.name)
-            except Exception:
-                if onerror is not None:
-                    onerror(info.name)
-                else:
-                    raise
-            else:
-                path = getattr(sys.modules[info.name], "__path__", None) or []
-
-                # don't traverse path items we've seen before
-                path = [p for p in path if not seen(p)]
-
-                yield from _walk_packages(path, info.name + ".", onerror)
-
-
 def import_packages():
-    sys.path.insert(0, f"{pathlib.Path(__file__).parent.parent}/source/unitree_rl_lab/unitree_rl_lab/tasks/")
-    for package in ["locomotion.robots"]:
-        package = importlib.import_module(package)
-        for _ in _walk_packages(package.__path__, package.__name__ + "."):
-            pass
-    sys.path.pop(0)
+    sys.path.insert(0, f"{pathlib.Path(__file__).parent.parent}/source/unitree_rl_lab")
+    try:
+        importlib.import_module("unitree_rl_lab.tasks")
+    finally:
+        sys.path.pop(0)
 
 
 import_packages()

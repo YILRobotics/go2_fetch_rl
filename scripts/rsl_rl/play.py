@@ -65,6 +65,27 @@ parser.add_argument(
     default=None,
     help="Path to the pretrained low-level policy.pt used by push tasks.",
 )
+parser.add_argument(
+    "--play_reset_mode",
+    type=str,
+    default="standard",
+    choices=["standard", "success_keep_robot"],
+    help="Reset behavior for play mode. 'success_keep_robot' keeps the robot on success and only respawns the cube.",
+)
+
+# Terrain
+parser.add_argument(
+    "--terrain_rows",
+    type=int,
+    default=3,
+    help="Override terrain-generator row count used in play mode.",
+)
+parser.add_argument(
+    "--terrain_cols",
+    type=int,
+    default=3,
+    help="Override terrain-generator column count used in play mode.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -73,6 +94,7 @@ args_cli = parser.parse_args()
 if args_cli.low_level_policy_path:
     os.environ["GO2_PUSH_LOW_LEVEL_POLICY_PATH"] = args_cli.low_level_policy_path
 os.environ["GO2_PUSH_COLOR_SEED"] = str(args_cli.seed)
+os.environ["GO2_PUSH_PLAY_RESET_MODE"] = args_cli.play_reset_mode
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
@@ -86,7 +108,6 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import time
 import torch
-from isaacsim.util.debug_draw import _debug_draw
 
 from rsl_rl.runners import OnPolicyRunner
 
@@ -102,6 +123,35 @@ import unitree_rl_lab.tasks  # noqa: F401
 from unitree_rl_lab.utils.parser_cfg import parse_env_cfg
 
 
+def _apply_play_terrain_overrides(env_cfg):
+    """Apply optional terrain-generator overrides from CLI for play runs."""
+    if args_cli.terrain_rows is None and args_cli.terrain_cols is None:
+        return
+
+    scene_cfg = getattr(env_cfg, "scene", None)
+    terrain_cfg = getattr(scene_cfg, "terrain", None) if scene_cfg is not None else None
+    terrain_generator_cfg = getattr(terrain_cfg, "terrain_generator", None) if terrain_cfg is not None else None
+    if terrain_cfg is None or terrain_generator_cfg is None:
+        print("[WARN] Terrain overrides ignored: task does not use a terrain generator.")
+        return
+
+    if args_cli.terrain_rows is not None:
+        if args_cli.terrain_rows < 1:
+            raise ValueError(f"--terrain_rows must be >= 1, got {args_cli.terrain_rows}")
+        terrain_generator_cfg.num_rows = args_cli.terrain_rows
+
+    if args_cli.terrain_cols is not None:
+        if args_cli.terrain_cols < 1:
+            raise ValueError(f"--terrain_cols must be >= 1, got {args_cli.terrain_cols}")
+        terrain_generator_cfg.num_cols = args_cli.terrain_cols
+
+    print(
+        "[INFO] Applied terrain overrides: "
+        f"rows={terrain_generator_cfg.num_rows}, "
+        f"cols={terrain_generator_cfg.num_cols}"
+    )
+
+
 def main():
     """Play with RSL-RL agent."""
     # parse configuration
@@ -112,6 +162,7 @@ def main():
         use_fabric=not args_cli.disable_fabric,
         entry_point_key="play_env_cfg_entry_point",
     )
+    _apply_play_terrain_overrides(env_cfg)
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
 
     # configure viewer/camera settings for rendering
@@ -167,11 +218,6 @@ def main():
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-    draw = _debug_draw.acquire_debug_draw_interface()
-    enable_goal_lines = "PushCube" in args_cli.task
-    max_debug_lines = 32
-    line_color = (1.0, 1.0, 1.0, 0.35)
-    line_width = 1.0
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
@@ -230,17 +276,6 @@ def main():
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
-            if enable_goal_lines:
-                base_env = env.unwrapped
-                num_lines = min(max_debug_lines, base_env.scene.num_envs)
-                draw.clear_lines()
-                robot_pos = base_env.scene["robot"].data.root_pos_w[:num_lines, :3].detach().cpu()
-                goal_pos = base_env.scene.env_origins[:num_lines, :3].detach().cpu().clone()
-                # Slight z offset to keep line endpoint visible above the goal marker.
-                goal_pos[:, 2] += 0.03
-                starts = [tuple(p.tolist()) for p in robot_pos]
-                ends = [tuple(p.tolist()) for p in goal_pos]
-                draw.draw_lines(starts, ends, [line_color] * num_lines, [line_width] * num_lines)
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

@@ -25,7 +25,7 @@ conda activate isaac_lab
 ### Unitree-Go2-Velocity-4L Task
 
 ```bash
-python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --logger wandb --video --video_interval 200 --video_length 400 --log_project_name test_example_vel_1 --run_name test_3leg_video_3
+python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --logger wandb --video --video_interval 500 --video_length 300 --log_project_name f_vel_4l --run_name walk_1
 ```
 
 **For live:** (don't use `--headless` and set low number of envs)
@@ -40,8 +40,52 @@ python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --num_envs 32
 python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt --headless --logger wandb --video --video_interval 75 --video_length 300 --log_project_name f_pushcube_4l --run_name test_43
 ```
 
-#### -> policies are saved in `unitree_rl_lab/logs/rsl_rl`
+- #### -> policies are saved in `unitree_rl_lab/logs/rsl_rl`
 
+### 1. BE CAREFUL WHEN CHANGING num_envs: adapt the terrain to cover all the area
+
+### 2. BE CAREFUL WHEN CHANGING ROBOR/CUBE SPAWN RADIUS: adjust the env_spacing so that the envs dont collide and crash
+
+### Env Frames and Why Robots Can Look Overlapped (Velocity vs Push)
+
+- Each vectorized environment (`env_i`) has its own local frame and world origin.
+- `env_spacing` controls the default grid distance between those env origins.
+- In terrain-generator tasks, `scene.env_origins` can come from sampled terrain patch origins (not only from the default grid).
+- Velocity tasks reset robot roots relative to `scene.env_origins`, so many envs can appear in similar world regions when many envs share limited terrain origins.
+- Push task uses a custom reset around goal/cube and anchors to cloned env grid origins (`_default_env_origins` when available), and it uses larger spacing (`env_spacing=10.0`), so envs are visually more separated.
+- Cross-env collisions are normally filtered by IsaacLab, so overlap in velocity usually looks like visual stacking of different env instances, not true physical interaction between those envs.
+
+
+### Learning iteration -> is one full PPO cycle:
+
+  1. Collect rollout data for all envs (num_steps_per_env steps each).
+  2. Run policy/value updates on that collected batch (multiple epochs/mini-batches).
+  3. Print one log block (Learning iteration X/Y).
+
+  For:
+
+  - num_envs = 4096
+  - num_steps_per_env = 32
+
+  One iteration collects:
+
+  - 4096 * 32 = 131,072 transitions
+
+
+### PushCube performance note (tensor caching)
+
+For `Unitree-Go2-PushCube-4L`, frequently reused tensors are cached in `source/unitree_rl_lab/unitree_rl_lab/tasks/push_mdp.py` (for example env ids, goal vectors, and goal-radius observation tensors) to reduce per-step tensor allocations.
+
+This optimization is meant to improve rollout throughput only. Task logic, rewards, and terminations are unchanged, so training behavior should remain the same while collection speed may increase.
+
+How it works:
+- Frequently used tensors are created once and reused (`env_ids`, `goal_xy`, `goal_radius`) instead of being recreated every step.
+- Scalar broadcasting is used where possible (instead of building full-size tensors just to multiply by one value).
+- `goal_position_xy` uses `expand` semantics instead of repeated allocation.
+
+Why it helps:
+- Fewer allocations in hot per-step paths reduces overhead in rollout collection.
+- At large `num_envs` this can improve `Steps per second` without changing the PPO/task logic.
 
 
 ## Play/Inference
@@ -57,6 +101,24 @@ python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --num_envs 32
 ```bash
 python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --checkpoint logs/rsl_rl/unitree_go2_velocity/2026-03-24_23-52-02/model_13200.pt
 ```
+
+### Unitree-Go2-PushCube-4L Task
+
+```bash
+python scripts/rsl_rl/play.py \
+  --task Unitree-Go2-PushCube-4L \
+  --num_envs 16 \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-04-04_14-57-59_test_69/model_900.pt \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt \
+  --play_reset_mode success_keep_robot
+```
+- When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
+
+- The push task already wraps the 4-leg velocity policy inside the push action stack in source/unitree_rl_lab/unitree_rl_lab/tasks/push_env_cfg.py:401, so Unitree-Go2-PushCube-4L runs the high-level push policy and the low-level one.
+
+- `play.py` also auto-exports the policy at:
+
+  `logs/rsl_rl/<task_name>/<run_timestamp>_<run_name>/exported/policy.pt`
 
 ---
 
@@ -202,7 +264,7 @@ Currently supports Unitree **Go2**, **H1** and **G1-29dof** robots.
     ```bash
     git clone https://huggingface.co/datasets/unitreerobotics/unitree_model
     ```
-  - Config `UNITREE_MODEL_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py`.
+  - Config `UNITREE_MODEL_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/unitree.py`.
 
     ```bash
     UNITREE_MODEL_DIR = "</home/user/projects/unitree_usd>"
@@ -213,7 +275,7 @@ Currently supports Unitree **Go2**, **H1** and **G1-29dof** robots.
       ```
       git clone https://github.com/unitreerobotics/unitree_ros.git
       ```
-  - Config `UNITREE_ROS_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py`.
+  - Config `UNITREE_ROS_DIR` in `source/unitree_rl_lab/unitree_rl_lab/assets/unitree.py`.
     ```bash
     UNITREE_ROS_DIR = "</home/user/projects/unitree_ros/unitree_ros>"
     ```

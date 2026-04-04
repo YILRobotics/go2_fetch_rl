@@ -20,8 +20,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
 import isaaclab_tasks.manager_based.navigation.mdp as nav_mdp
-from unitree_rl_lab.assets.robots.unitree import UNITREE_GO2_CFG as ROBOT_CFG
-from unitree_rl_lab.tasks.locomotion import mdp
+from unitree_rl_lab.assets.unitree import UNITREE_GO2_CFG as ROBOT_CFG
+from unitree_rl_lab.tasks import mdp
 
 from . import push_mdp
 from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
@@ -33,17 +33,35 @@ GOAL_RADIUS_M = 0.2
 HIGH_LEVEL_POLICY_HZ = 15.0
 
 # Curriculum step parameters
-CMD_CURRICULUM_STEP_SIZE = 800  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
+CMD_CURRICULUM_STEP_SIZE = 500  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
 CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.02
 CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.35
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.4
 
-TRANSITION_STEPS = 50000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+SCALE_BACK_VEL = 0.1
+SCALE_SIDE_VEL = 0.3
 
+TRANSITION_STEPS = 10000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+
+SUCCESS_CUBE_SPEED_THRESHOLD = 0.05
+SUCCESS_HOLD_TIME_S = 0.6
+SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN = 0.05
+SUCCESS_ROBOT_SPEED_THRESHOLD = 0.15
+
+CUBE_POS_OBS_NOISE_STD = 0.015 # m
+CUBE_VEL_OBS_NOISE_STD = 0.08 # m/s
+CUBE_POS_OBS_DROPOUT_PROB = 0.05 
+CUBE_VEL_OBS_DROPOUT_PROB = 0.08
+CUBE_POS_OBS_DELAY_STEPS = 1
+CUBE_VEL_OBS_DELAY_STEPS = 1
+CUBE_POS_OBS_SPIKE_PROB = 0.01
+CUBE_VEL_OBS_SPIKE_PROB = 0.01
+CUBE_POS_OBS_SPIKE_STD = 0.05
+CUBE_VEL_OBS_SPIKE_STD = 0.15
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
     return max(1, int(round(1.0 / (sim_dt * policy_hz))))
@@ -93,7 +111,7 @@ def _resolve_low_level_policy_path() -> str:
     if policy_override:
         return _normalize_and_validate(Path(policy_override).expanduser().resolve())
 
-    repo_root = Path(__file__).resolve().parents[7]
+    repo_root = Path(__file__).resolve().parents[4]
     candidates = sorted(repo_root.glob("logs/rsl_rl/unitree_go2_velocity/*/exported/policy.pt"))
     if candidates:
         return _normalize_and_validate(candidates[-1].resolve())
@@ -107,10 +125,10 @@ LOW_LEVEL_POLICY_PATH = _resolve_low_level_policy_path()
 
 
 COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(8.0, 8.0),
+    size=(10.0, 10.0),
     border_width=10.0,
-    num_rows=18,
-    num_cols=18,
+    num_rows=100, # 65
+    num_cols=100, # 65
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.75,
@@ -137,36 +155,36 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
 )
 
 
-PUSH_MIXED_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(8.0, 8.0),
-    border_width=10.0,
-    num_rows=8,
-    num_cols=3,
-    horizontal_scale=0.1,
-    vertical_scale=0.005,
-    slope_threshold=0.75,
-    difficulty_range=(0.0, 1.0),
-    use_cache=False,
-    sub_terrains={
-        # flat
-        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.34),
-        # slanted
-        "sloped": terrain_gen.HfPyramidSlopedTerrainCfg(
-            proportion=0.33,
-            slope_range=(0.0, 0.005),
-            platform_width=2.2,
-            border_width=0.2,
-        ),
-        # slightly uneven
-        "slightly_uneven": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.33, # means approximately 1-2 patches of noise per 1 patch of slope
-            # Keep values aligned with vertical_scale=0.005 to avoid zero height-step quantization.
-            noise_range=(0.001, 0.005),
-            noise_step=0.005, # multiple of vertical_scale to avoid zero height-step quantization
-            border_width=0.2,
-        ),
-    },
-)
+# PUSH_MIXED_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
+#     size=(8.0, 8.0),
+#     border_width=10.0,
+#     num_rows=8,
+#     num_cols=3,
+#     horizontal_scale=0.1,
+#     vertical_scale=0.005,
+#     slope_threshold=0.75,
+#     difficulty_range=(0.0, 1.0),
+#     use_cache=False,
+#     sub_terrains={
+#         # flat
+#         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.34),
+#         # slanted
+#         "sloped": terrain_gen.HfPyramidSlopedTerrainCfg(
+#             proportion=0.33,
+#             slope_range=(0.0, 0.005),
+#             platform_width=2.2,
+#             border_width=0.2,
+#         ),
+#         # slightly uneven
+#         "slightly_uneven": terrain_gen.HfRandomUniformTerrainCfg(
+#             proportion=0.33, # means approximately 1-2 patches of noise per 1 patch of slope
+#             # Keep values aligned with vertical_scale=0.005 to avoid zero height-step quantization.
+#             noise_range=(0.001, 0.005),
+#             noise_step=0.005, # multiple of vertical_scale to avoid zero height-step quantization
+#             border_width=0.2,
+#         ),
+#     },
+# )
 
 
 @configclass
@@ -297,7 +315,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "mass_distribution_params": (0.7, 1.30),
+            "mass_distribution_params": (0.5, 1.50), # min. and max. percent of original
             "operation": "scale",
         },
     )
@@ -307,7 +325,7 @@ class EventCfg:
         mode="prestartup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "scale_range": (0.8, 1.3),
+            "scale_range": (0.6, 1.8),
         },
     )
 
@@ -326,8 +344,8 @@ class EventCfg:
         func=push_mdp.randomize_floor_friction_per_reset,
         mode="reset",
         params={
-            "static_friction_range": (0.70, 0.90),
-            "dynamic_friction_range": (0.55, 0.75),
+            "static_friction_range": (0.65, 0.95),
+            "dynamic_friction_range": (0.55, 0.85),
             "restitution_range": (0.02, 0.08),
             "terrain_material_prim_path": "/World/ground/terrain/physicsMaterial",
         },
@@ -341,10 +359,10 @@ class EventCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_spawn_radius_range": (0.8, 2.2), # min should be > goal radius to avoid spawns inside the goal
+            "cube_spawn_radius_range": (0.8, 2.5), # min should be > goal radius to avoid spawns inside the goal
             "cube_height": 0.12, # cube spawn height 
             "cube_yaw_range": (-3.14, 3.14), 
-            "robot_spawn_radius_range": (0.25, 1.2), # robot is spawned in this radius around the CUBE. Min should be big enough to avoid initial robot-cube peneration. 
+            "robot_spawn_radius_range": (0.3, 2.5), # robot is spawned in this radius around the CUBE. Min should be big enough to avoid initial robot-cube peneration. 
             "robot_yaw_range": (-3.14, 3.14),
             "robot_velocity_range": {
                 "x": (0.0, 0.0),
@@ -375,15 +393,15 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(1.0e9, 1.0e9),
         rel_standing_envs=0.0,
-        debug_vis=True,
+        debug_vis=False, # Show velocity arrow over the robot
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
-            lin_vel_y=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
+            lin_vel_x=(-CMD_INIT_LIN_VEL_ABS*SCALE_BACK_VEL, CMD_INIT_LIN_VEL_ABS), # forward / backward
+            lin_vel_y=(-CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL, CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL), # left / right
             ang_vel_z=(-CMD_INIT_ANG_VEL_ABS, CMD_INIT_ANG_VEL_ABS),
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-CMD_LIMIT_LIN_VEL_X_ABS, CMD_LIMIT_LIN_VEL_X_ABS),
-            lin_vel_y=(-CMD_LIMIT_LIN_VEL_Y_ABS, CMD_LIMIT_LIN_VEL_Y_ABS),
+            lin_vel_x=(-CMD_LIMIT_LIN_VEL_X_ABS*SCALE_BACK_VEL, CMD_LIMIT_LIN_VEL_X_ABS),
+            lin_vel_y=(-CMD_LIMIT_LIN_VEL_Y_ABS*SCALE_SIDE_VEL, CMD_LIMIT_LIN_VEL_Y_ABS*SCALE_SIDE_VEL),
             ang_vel_z=(-CMD_LIMIT_ANG_VEL_Z_ABS, CMD_LIMIT_ANG_VEL_Z_ABS),
         ),
     )
@@ -417,8 +435,26 @@ class ObservationsCfg:
 
         robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy)
         robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy)
-        cube_pos_xy = ObsTerm(func=push_mdp.cube_position_xy)
-        cube_lin_vel_xy = ObsTerm(func=push_mdp.cube_linear_velocity_xy)
+        cube_pos_xy = ObsTerm(
+            func=push_mdp.cube_position_xy,
+            params={
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
+        cube_lin_vel_xy = ObsTerm(
+            func=push_mdp.cube_linear_velocity_xy,
+            params={
+                "noise_std": CUBE_VEL_OBS_NOISE_STD,
+                "dropout_prob": CUBE_VEL_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_VEL_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_VEL_OBS_SPIKE_PROB,
+                "spike_std": CUBE_VEL_OBS_SPIKE_STD,
+            },
+        )
         goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
         goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
         cube_to_goal_xy = ObsTerm(func=push_mdp.cube_to_goal_vector_xy, params={"goal_xy": GOAL_XY})
@@ -448,8 +484,26 @@ class ObservationsCfg:
 
         robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy)
         robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy)
-        cube_pos_xy = ObsTerm(func=push_mdp.cube_position_xy)
-        cube_lin_vel_xy = ObsTerm(func=push_mdp.cube_linear_velocity_xy)
+        cube_pos_xy = ObsTerm(
+            func=push_mdp.cube_position_xy,
+            params={
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
+        cube_lin_vel_xy = ObsTerm(
+            func=push_mdp.cube_linear_velocity_xy,
+            params={
+                "noise_std": CUBE_VEL_OBS_NOISE_STD,
+                "dropout_prob": CUBE_VEL_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_VEL_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_VEL_OBS_SPIKE_PROB,
+                "spike_std": CUBE_VEL_OBS_SPIKE_STD,
+            },
+        )
         goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
         goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
         cube_to_goal_xy = ObsTerm(func=push_mdp.cube_to_goal_vector_xy, params={"goal_xy": GOAL_XY})
@@ -472,43 +526,106 @@ class ObservationsCfg:
 class RewardsCfg:
     """Push task rewards with curriculum from approach to goal pushing."""
 
+    #### REWARDS ####
+
     cube_to_goal_progress = RewTerm(
         func=push_mdp.cube_to_goal_progress_reward,
-        weight=30.0,
+        weight=28.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
-            "transition_steps": TRANSITION_STEPS, # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+            "transition_steps": TRANSITION_STEPS/2, # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
         },
     )
+    
+    # # One time reward
+    # success_bonus = RewTerm(
+    #     func=push_mdp.success_bonus_reward,
+    #     weight=40.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.0,
+    #         "hold_time_s": HOLD_TIME_S,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
     
     # One time reward
-    success_bonus = RewTerm(
-        func=push_mdp.success_bonus_reward,
-        weight=40.0,
+    success_bonus_pretrigger = RewTerm(
+        func=push_mdp.success_trigger_reward_robot_outsid_goal,
+        weight=50.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
+            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
+            "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.50,
+            "cube_speed_threshold": SUCCESS_CUBE_SPEED_THRESHOLD,
+            "cube_in_goal_additional_margin": SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN,
+            "hold_time_s": SUCCESS_HOLD_TIME_S,
+            "robot_speed_threshold": SUCCESS_ROBOT_SPEED_THRESHOLD,
+            "transition_steps": TRANSITION_STEPS/2,
         },
     )
     
-    cube_settled_in_goal = RewTerm(
-        func=push_mdp.cube_settled_in_goal_reward,
-        weight=8.0,
+    # cube_settled_in_goal = RewTerm(
+    #     func=push_mdp.cube_settled_in_goal_reward,
+    #     weight=8.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.05,
+    #         "hold_time_s": HOLD_TIME_S,
+    #         "vel_std": 0.1,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
+
+    robot_stop_after_goal = RewTerm(
+        func=push_mdp.robot_stop_after_goal_reward,
+        weight=5.0,
         params={
+            "robot_cfg": SceneEntityCfg("robot"),
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "vel_std": 0.1,
+            "cube_in_goal_additional_margin": SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN,
+            "vel_std": 0.05,
             "transition_steps": TRANSITION_STEPS,
         },
     )
+
+    # Continous reward
+    # cube_in_goal = RewTerm(
+    #     func=push_mdp.cube_in_goal_reward,
+    #     weight=10.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "transition_steps": TRANSITION_STEPS/2,
+    #     },
+    # )
+
+    # goal_hold_progress = RewTerm(
+    #     func=push_mdp.goal_hold_progress_reward,
+    #     weight=2.0,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.05,
+    #         "hold_time_s": HOLD_TIME_S,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
     
     robot_to_cube_approach = RewTerm(
         func=push_mdp.robot_to_cube_approach_progress_reward,
-        weight=2.0,
+        weight=1.5,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
@@ -517,26 +634,70 @@ class RewardsCfg:
             "transition_steps": TRANSITION_STEPS, # this transitions down.
         },
     )
+
+    # just active when cube is outside the goal
+    push_direction = RewTerm(
+        func=push_mdp.push_direction_reward,
+        weight=2.5,
+        params={
+            "cube_cfg": SceneEntityCfg("cube"),
+            "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
+            "goal_margin": 0.0,
+            "transition_steps": TRANSITION_STEPS,
+            "speed_threshold": 0.05,
+        },
+    )
+
+    # # rewards when robot forward moving, cube is moving and robot is close to the cube. This reward encourages the robot to move forward while pushing the cube, but only when it's effectively pushing (cube is moving) and in the right direction (robot close to cube).   
+    # forward_push = RewTerm(
+    #     func=push_mdp.forward_push_reward,
+    #     weight=0.1,
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "cube_speed_threshold": 0.03,
+    #         "forward_speed_threshold": 0.05,
+    #         "max_robot_cube_distance": 0.8,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
+    
+    #### PENATLIES ####
     
     # until max_distance 0 penatly, after, linearly increasing penalty.
     cube_to_leg_distance_penalty = RewTerm( 
         func=push_mdp.cube_to_nearest_foot_distance_penalty,
-        weight=-2.0,
+        weight=-4.0,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
-            "max_distance": 0.35,
+            "max_distance": 0.2,
+            "transition_steps": TRANSITION_STEPS,
+        },
+    )
+    
+    goal_exit_penalty = RewTerm(
+        func=push_mdp.cube_exit_goal_penalty,
+        weight=-15.0,
+        params={
+            "cube_cfg": SceneEntityCfg("cube"),
+            "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
             "transition_steps": TRANSITION_STEPS,
         },
     )
 
-    push_direction = RewTerm(
-        func=push_mdp.push_direction_reward,
-        weight=8.0,
+    robot_in_goal_area = RewTerm(
+        func=push_mdp.robot_in_goal_area_penalty,
+        weight=-8.0,
         params={
-            "cube_cfg": SceneEntityCfg("cube"),
+            "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
+            "margin": 0.35, # robot radius from base
             "transition_steps": TRANSITION_STEPS,
+            "start_offset_steps": 0,
         },
     )
 
@@ -555,13 +716,29 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     
+    # success = DoneTerm(
+    #     func=push_mdp.cube_goal_reached,
+    #     params={
+    #         "cube_cfg": SceneEntityCfg("cube"),
+    #         "goal_xy": GOAL_XY,
+    #         "goal_radius": GOAL_RADIUS_M,
+    #         "cube_speed_threshold": 0.05,
+    #         "hold_time_s": 1.0,
+    #     },
+    # )
+
     success = DoneTerm(
-        func=push_mdp.cube_goal_reached,
+        func=push_mdp.cube_goal_reached_robot_outsid_goal,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
+            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
+            "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.20,
+            "cube_speed_threshold": SUCCESS_CUBE_SPEED_THRESHOLD,
+            "cube_in_goal_additional_margin": SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN,  # cube should be a bit more inside the goal area
+            "hold_time_s": SUCCESS_HOLD_TIME_S,
+            "robot_speed_threshold": SUCCESS_ROBOT_SPEED_THRESHOLD,
         },
     )
     
@@ -580,6 +757,7 @@ class TerminationsCfg:
 class CurriculumCfg:
     """Curriculum terms for push command magnitudes (stepwise increments)."""
 
+    # Overrides Settings set in CommandsCfg
     command_velocity_envelope = CurrTerm(
         func=push_mdp.command_velocity_envelope_stepwise_curriculum,
         params={
@@ -591,11 +769,13 @@ class CurriculumCfg:
             "limit_lin_vel_x": CMD_LIMIT_LIN_VEL_X_ABS,
             "limit_lin_vel_y": CMD_LIMIT_LIN_VEL_Y_ABS,
             "limit_ang_vel_z": CMD_LIMIT_ANG_VEL_Z_ABS,
+            "scale_back_vel": SCALE_BACK_VEL,
+            "scale_side_vel": SCALE_SIDE_VEL,
         },
     )
     
     common_step_counter = CurrTerm(
-        func=push_mdp.  ,
+        func=push_mdp.curriculum_common_step_counter,
         params={},
     )
     
@@ -611,7 +791,7 @@ class CurriculumCfg:
 class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for Go2 high-level push task using a pretrained low-level locomotion policy."""
 
-    scene: RobotSceneCfg = RobotSceneCfg(num_envs=4096, env_spacing=2.5) # distance (in meters) between neighboring environment origins (goal centers) in the world layout.
+    scene: RobotSceneCfg = RobotSceneCfg(num_envs=6144, env_spacing=10.0) # 4096 # distance (in meters) between neighboring environment origins (goal centers) in the world layout.
 
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -624,7 +804,7 @@ class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         self.decimation = HIGH_LEVEL_DECIMATION
-        self.episode_length_s = 35.0 # timeout time in seconds, used by mdp.time_out termination condition
+        self.episode_length_s = 25.0 # timeout time in seconds, used by mdp.time_out termination condition
 
         self.sim.dt = SIM_DT
         self.sim.render_interval = self.decimation
@@ -644,3 +824,11 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
         self.scene.num_envs = 32
         self.observations.policy.enable_corruption = False
         self.observations.critic.enable_corruption = False
+
+        reset_mode = os.getenv("GO2_PUSH_PLAY_RESET_MODE", "standard").strip().lower()
+        if reset_mode == "success_keep_robot":
+            self.events.reset_robot_and_cube.func = push_mdp.reset_push_episode_by_termination
+            self.events.reset_robot_and_cube.params["joint_position_range"] = (1.0, 1.0)
+            self.events.reset_robot_and_cube.params["joint_velocity_range"] = (-1.0, 1.0)
+            self.events.reset_robot_joints.func = push_mdp.no_op_reset
+            self.events.reset_robot_joints.params = {}

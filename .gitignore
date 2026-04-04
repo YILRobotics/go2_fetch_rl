@@ -73,3 +73,7 @@ datasets
 
 # Mimic
 *.npz
+
+# From Ferdinand
+.codex
+rb_isaac_edu/

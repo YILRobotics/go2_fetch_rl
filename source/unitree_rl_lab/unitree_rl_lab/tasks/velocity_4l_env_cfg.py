@@ -18,11 +18,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from unitree_rl_lab.assets.robots.unitree import UNITREE_GO2_CFG as ROBOT_CFG
-from unitree_rl_lab.tasks.locomotion import mdp
-
-FL_FOOT_REGEX = "FL_foot.*"
-SUPPORT_FEET_REGEX = "(FR|RR|RL)_foot.*"
+from unitree_rl_lab.assets.unitree import UNITREE_GO2_CFG as ROBOT_CFG
+from unitree_rl_lab.tasks import mdp
 
 COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
     size=(8.0, 8.0),
@@ -37,24 +34,24 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
     sub_terrains={
         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.1, noise_range=(0.01, 0.06), noise_step=0.01, border_width=0.25
+            proportion=0.1, noise_range=(0.01, 0.05), noise_step=0.01, border_width=0.25
         ),
         "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
             proportion=0.1,
-            slope_range=(0.0, 0.4),
+            slope_range=(0.0, 0.2),
             platform_width=2.0,
             border_width=0.25,
         ),
         "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
             proportion=0.1,
-            slope_range=(0.0, 0.4),
+            slope_range=(0.0, 0.2),
             platform_width=2.0,
             border_width=0.25,
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.1,
             grid_width=0.45,
-            grid_height_range=(0.025, 0.08),
+            grid_height_range=(0.01, 0.02),
             platform_width=2.0,
         ),
         # "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
@@ -159,8 +156,10 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            # "force_range": (-2.5, 2.5),
+            # "torque_range": (-0.5, 0.5),
             "force_range": (0.0, 0.0),
-            "torque_range": (-0.0, 0.0),
+            "torque_range": (0.0, 0.0),
         },
     )
 
@@ -209,10 +208,10 @@ class CommandsCfg:
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
-        ),
+        ), # command sampling range used during normal training command generation
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
-        ),
+        ), # wider allowable envelope for the same command dimensions. For wider allowable envelope for the same command dimensions.
     )
 
 
@@ -310,7 +309,7 @@ class RewardsCfg:
     # -- task
     track_lin_vel_xy = RewTerm(
         func=mdp.track_lin_vel_xy_exp,
-        weight=2.25,
+        weight=1.5,
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
     track_ang_vel_z = RewTerm(
@@ -345,50 +344,21 @@ class RewardsCfg:
     # -- feet
     feet_air_time = RewTerm(
         func=mdp.feet_air_time,
-        weight=0.15,
+        weight=0.1,
         params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=SUPPORT_FEET_REGEX),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
             "command_name": "base_velocity",
             "threshold": 0.5,
         },
     )
-
-    fl_foot_lift = RewTerm(
-        func=mdp.foot_relative_height_exp,
-        weight=2.0,
-        params={
-            "target_foot_cfg": SceneEntityCfg("robot", body_names=FL_FOOT_REGEX),
-            "reference_feet_cfg": SceneEntityCfg("robot", body_names=SUPPORT_FEET_REGEX),
-            "target_height": 0.06,
-            "std": 0.02,
-        },
-    )
-
-    fl_foot_ground_contact = RewTerm(
-        func=mdp.foot_contact,
-        weight=-3.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=FL_FOOT_REGEX)},
-    )
-    
-    fl_foot_air_shake = RewTerm(
-        func=mdp.foot_air_shake_penalty,
-        weight=-0.1,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names=FL_FOOT_REGEX),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FL_FOOT_REGEX),
-            "use_vertical_component": False,
-        },
-    )
-
     air_time_variance = RewTerm(
         func=mdp.air_time_variance_penalty,
-        weight=-0.25,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=SUPPORT_FEET_REGEX)},
+        weight=-1.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
     )
-    
     feet_slide = RewTerm(
         func=mdp.feet_slide,
-        weight=-0.2,
+        weight=-0.1,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
@@ -415,6 +385,9 @@ class RewardsCfg:
             ),
         },
     )
+    
+    # added by ferdinand later when trying to fix crashing, not in original code
+    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
 
 
 @configclass
@@ -422,7 +395,6 @@ class TerminationsCfg:
     """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    
     base_contact = DoneTerm(
         func=mdp.illegal_contact,
         params={
@@ -430,15 +402,7 @@ class TerminationsCfg:
             "threshold": 1.0,
         },
     )
-    
     bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.8})
-    fl_foot_contact_too_long = DoneTerm(
-        func=mdp.foot_contact_too_long,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FL_FOOT_REGEX),
-            "max_contact_time_s": 0.25,
-        },
-    )
 
 
 @configclass
@@ -454,7 +418,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the locomotion velocity-tracking environment."""
 
     # Scene settings
-    scene: RobotSceneCfg = RobotSceneCfg(num_envs=4069, env_spacing=2.5) ### num_envs=4096 default, 6144
+    scene: RobotSceneCfg = RobotSceneCfg(num_envs=4096, env_spacing=2.5) # spacing means  
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -495,7 +459,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
 class RobotPlayEnvCfg(RobotEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 32
+        self.scene.num_envs = 256
 
         # self.scene.terrain.terrain_generator.num_rows = 1
         # self.scene.terrain.terrain_generator.num_cols = 2

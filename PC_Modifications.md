@@ -8,6 +8,8 @@ sudo apt install nvtop -y
 sudo apt install htop -y
 sudo apt install tree -y
 sudo apt install htop -y
+
+sudo apt install ros-humble-librealsense2*
 ```
 
 
