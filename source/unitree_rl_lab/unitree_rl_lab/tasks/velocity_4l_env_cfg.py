@@ -156,8 +156,10 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "force_range": (-25.0, 25.0),
-            "torque_range": (-5.0, 5.0),
+            # "force_range": (-2.5, 2.5),
+            # "torque_range": (-0.5, 0.5),
+            "force_range": (0.0, 0.0),
+            "torque_range": (0.0, 0.0),
         },
     )
 

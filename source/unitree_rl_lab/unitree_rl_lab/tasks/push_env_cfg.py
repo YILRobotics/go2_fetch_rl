@@ -42,7 +42,7 @@ CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
 CMD_LIMIT_ANG_VEL_Z_ABS = 0.4
 
-TRANSITION_STEPS = 20000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+TRANSITION_STEPS = 10000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
 # HOLD_TIME_S = 0.7 # Time that the cube needs to be stably within the goal radius for the success reward to be granted.
 
@@ -119,10 +119,10 @@ LOW_LEVEL_POLICY_PATH = _resolve_low_level_policy_path()
 
 
 COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
-    size=(8.0, 8.0),
+    size=(10.0, 10.0),
     border_width=10.0,
-    num_rows=18,
-    num_cols=18,
+    num_rows=100, # 65
+    num_cols=100, # 65
     horizontal_scale=0.1,
     vertical_scale=0.005,
     slope_threshold=0.75,
@@ -353,7 +353,7 @@ class EventCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_spawn_radius_range": (0.8, 3.5), # min should be > goal radius to avoid spawns inside the goal
+            "cube_spawn_radius_range": (0.8, 2.5), # min should be > goal radius to avoid spawns inside the goal
             "cube_height": 0.12, # cube spawn height 
             "cube_yaw_range": (-3.14, 3.14), 
             "robot_spawn_radius_range": (0.3, 2.5), # robot is spawned in this radius around the CUBE. Min should be big enough to avoid initial robot-cube peneration. 
@@ -387,7 +387,7 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(1.0e9, 1.0e9),
         rel_standing_envs=0.0,
-        debug_vis=True, # Show arrow over the robot
+        debug_vis=False, # Show velocity arrow over the robot
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
             lin_vel_y=(-CMD_INIT_LIN_VEL_ABS, CMD_INIT_LIN_VEL_ABS),
@@ -524,7 +524,7 @@ class RewardsCfg:
 
     cube_to_goal_progress = RewTerm(
         func=push_mdp.cube_to_goal_progress_reward,
-        weight=25.0,
+        weight=28.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
@@ -614,7 +614,7 @@ class RewardsCfg:
     # just active when cube is outside the goal
     push_direction = RewTerm(
         func=push_mdp.push_direction_reward,
-        weight=3.0,
+        weight=2.5,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
@@ -712,9 +712,9 @@ class TerminationsCfg:
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
             "cube_speed_threshold": 0.05,
-            "cube_in_goal_additional_margin": 0.15,  # cube should be a bit more inside the goal area
-            "hold_time_s": 0.5,
-            "robot_speed_threshold": 0.05,
+            "cube_in_goal_additional_margin": 0.05,  # cube should be a bit more inside the goal area
+            "hold_time_s": 0.2,
+            "robot_speed_threshold": 0.2,
         },
     )
     
@@ -764,7 +764,7 @@ class CurriculumCfg:
 class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for Go2 high-level push task using a pretrained low-level locomotion policy."""
 
-    scene: RobotSceneCfg = RobotSceneCfg(num_envs=4096, env_spacing=2.5) # distance (in meters) between neighboring environment origins (goal centers) in the world layout.
+    scene: RobotSceneCfg = RobotSceneCfg(num_envs=6144, env_spacing=10.0) # 4096 # distance (in meters) between neighboring environment origins (goal centers) in the world layout.
 
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

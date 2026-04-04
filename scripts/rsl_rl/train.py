@@ -34,8 +34,10 @@ import cli_args  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
-VIDEO_WIDTH = 1920
-VIDEO_HEIGHT = 1080
+VIDEO_WIDTH = 1280 # 1920
+VIDEO_HEIGHT = 720 # 1080
+# DEFAULT_VIDEO_NUM_ENVS = 32
+# MAX_VIDEO_NUM_ENVS = 256
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument(
@@ -56,7 +58,7 @@ parser.add_argument(
     type=float,
     nargs=3,
     # default=[-30.0, 64.0, 4.5],
-    default=[-52.0, 0.0, 5.0],
+    default=[-60.0, 0.0, 7.0],
     # default=[-20.0, 0.0, 5.0], # good for 32 envs
     help="Camera eye position for fixed/follow modes.",
 )
@@ -65,7 +67,7 @@ parser.add_argument(
     type=float,
     nargs=3,
     # default=[-28.0, 0.0, -20.0],
-    default=[0.0, 0.0, -18.0],
+    default=[0.0, 0.0, -14.0],
     # default=[0.0, 0.0, 0.0], # good for 32 envs
     help="Camera look-at target for fixed/follow modes.",
 )
@@ -107,6 +109,17 @@ if hasattr(args_cli, "height"):
 # always enable cameras to record video
 if args_cli.video:
     args_cli.enable_cameras = True
+    # if args_cli.num_envs is None:
+    #     args_cli.num_envs = DEFAULT_VIDEO_NUM_ENVS
+    #     print(
+    #         f"[INFO] Video capture enabled without --num_envs; defaulting to {DEFAULT_VIDEO_NUM_ENVS} envs "
+    #         "to avoid renderer failures with the 4L training default."
+    #     )
+    # elif args_cli.num_envs > MAX_VIDEO_NUM_ENVS:
+    #     raise ValueError(
+    #         f"Video capture is only supported up to {MAX_VIDEO_NUM_ENVS} envs in this script; "
+    #         f"got --num_envs {args_cli.num_envs}. Reduce --num_envs or disable --video."
+    #     )
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
