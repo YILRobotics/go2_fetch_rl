@@ -1089,9 +1089,8 @@ def respawn_cube_uniform_around_goal(
 def no_op_reset(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
-    **kwargs,
 ):
-    del env, env_ids, kwargs
+    del env, env_ids
 
 
 def reset_push_episode_by_termination(

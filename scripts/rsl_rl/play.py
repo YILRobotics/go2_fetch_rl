@@ -94,7 +94,6 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import time
 import torch
-from isaacsim.util.debug_draw import _debug_draw
 
 from rsl_rl.runners import OnPolicyRunner
 
@@ -175,11 +174,6 @@ def main():
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-    draw = _debug_draw.acquire_debug_draw_interface()
-    enable_goal_lines = "PushCube" in args_cli.task
-    max_debug_lines = 32
-    line_color = (1.0, 1.0, 1.0, 0.35)
-    line_width = 1.0
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
@@ -238,17 +232,6 @@ def main():
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
-            if enable_goal_lines:
-                base_env = env.unwrapped
-                num_lines = min(max_debug_lines, base_env.scene.num_envs)
-                draw.clear_lines()
-                robot_pos = base_env.scene["robot"].data.root_pos_w[:num_lines, :3].detach().cpu()
-                goal_pos = base_env.scene.env_origins[:num_lines, :3].detach().cpu().clone()
-                # Slight z offset to keep line endpoint visible above the goal marker.
-                goal_pos[:, 2] += 0.03
-                starts = [tuple(p.tolist()) for p in robot_pos]
-                ends = [tuple(p.tolist()) for p in goal_pos]
-                draw.draw_lines(starts, ends, [line_color] * num_lines, [line_width] * num_lines)
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

@@ -825,3 +825,4 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
             self.events.reset_robot_and_cube.params["joint_position_range"] = (1.0, 1.0)
             self.events.reset_robot_and_cube.params["joint_velocity_range"] = (-1.0, 1.0)
             self.events.reset_robot_joints.func = push_mdp.no_op_reset
+            self.events.reset_robot_joints.params = {}
