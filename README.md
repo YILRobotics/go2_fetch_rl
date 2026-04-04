@@ -25,10 +25,8 @@ conda activate isaac_lab
 ### Unitree-Go2-Velocity-4L Task
 
 ```bash
-python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --num_envs 32 --logger wandb --video --video_interval 200 --video_length 400 --log_project_name test_example_vel_1 --run_name test_3leg_video_3
+python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --logger wandb --video --video_interval 250 --video_length 300 --log_project_name f_vel_4l --run_name walk_1
 ```
-
-When using `--video`, keep `--num_envs` low. The training config defaults to `4096` envs, which can make Isaac Sim's renderer return invalid CUDA buffers during video capture.
 
 **For live:** (don't use `--headless` and set low number of envs)
 

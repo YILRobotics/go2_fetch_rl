@@ -46,6 +46,7 @@ parser.add_argument(
     default=200,
     help="Interval between video recordings (in learning iterations).",
 )
+# FOLLOW MODE DOESNT WORK
 parser.add_argument(
     "--camera_mode",
     type=str,
@@ -53,25 +54,20 @@ parser.add_argument(
     choices=["fixed", "follow"],
     help="Camera mode used for rendering/video capture.",
 )
-parser.add_argument(
-    "--camera_eye",
-    type=float,
-    nargs=3,
-    # default=[-30.0, 64.0, 4.5],
-    # default=[-60.0, 0.0, 7.0], # good for push task
-    # default=[-20.0, 0.0, 5.0], # good for 32 envs
-    default=[-85.0, 0.0, 10.0],
-    help="Camera eye position for fixed/follow modes.",
-)
-parser.add_argument(
-    "--camera_lookat",
-    type=float,
-    nargs=3,
-    # default=[-28.0, 0.0, -20.0],
-    default=[0.0, 0.0, -25.0],
-    # default=[0.0, 0.0, 0.0], # good for 32 envs
-    help="Camera look-at target for fixed/follow modes.",
-)
+# parser.add_argument(
+#     "--camera_eye",
+#     type=float,
+#     nargs=3,
+#     default=[-20.0, 0.0, 5.0], # good for 32 envs
+#     help="Camera eye position for fixed/follow modes.",
+# )
+# parser.add_argument(
+#     "--camera_lookat",
+#     type=float,
+#     nargs=3,
+#     default=[0.0, 0.0, 0.0], # good for 32 envs
+#     help="Camera look-at target for fixed/follow modes.",
+# )
 parser.add_argument(
     "--camera_follow_prim",
     type=str,
@@ -203,8 +199,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # configure viewer/camera settings for rendering
     if hasattr(env_cfg, "viewer"):
-        env_cfg.viewer.eye = list(args_cli.camera_eye)
-        env_cfg.viewer.lookat = list(args_cli.camera_lookat)
+        ### Change camera position and where its looking here
+        if args_cli.task == "UnitreeGo2PushCube4L":
+            env_cfg.viewer.eye = [-60.0, 0.0, 7.0]
+            env_cfg.viewer.lookat = [0.0, 0.0, -14]
+        else:
+            env_cfg.viewer.eye = [-70.0, -30.0, 10.0]
+            env_cfg.viewer.lookat = [0.0, 0.0, -25]
+        # env_cfg.viewer.eye = list(args_cli.camera_eye)
+        # env_cfg.viewer.lookat = list(args_cli.camera_lookat)
         if args_cli.camera_mode == "follow":
             follow_attr_candidates = [
                 "follow_prim_path",

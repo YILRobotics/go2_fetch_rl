@@ -45,7 +45,7 @@ def _to_float_or_none(value: str | None) -> float | None:
     except (TypeError, ValueError):
         return None
 
-
+########### DONT COMMENT IN THE COMMENTED OUT CODE, IT REDUCES WARNINGS BUT TRAING VEL POLICY WILL FAIL ####################
 def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
     """Create a sanitized URDF copy to avoid noisy importer warnings."""
     tree = ET.parse(source_urdf)
@@ -58,17 +58,17 @@ def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
             continue
         material.set("name", _sanitize_usd_identifier(name, fallback="material"))
 
-    # 2) Prevent fixed-joint body merges (deprecated in IsaacSim URDF importer).
-    for joint in root.iter("joint"):
-        if joint.get("type") != "fixed":
-            continue
-        if joint.get("dont_collapse") is None:
-            joint.set("dont_collapse", "true")
+    # # 2) Prevent fixed-joint body merges (deprecated in IsaacSim URDF importer).
+    # for joint in root.iter("joint"):
+    #     if joint.get("type") != "fixed":
+    #         continue
+    #     if joint.get("dont_collapse") is None:
+    #         joint.set("dont_collapse", "true")
 
-        # Fixed joints do not use axis, but zero vectors can still trigger importer warnings.
-        axis = joint.find("axis")
-        if axis is not None and axis.get("xyz", "").strip() in {"0 0 0", "0 0 0.0", "0.0 0.0 0.0"}:
-            axis.set("xyz", "1 0 0")
+    #     # Fixed joints do not use axis, but zero vectors can still trigger importer warnings.
+    #     axis = joint.find("axis")
+    #     if axis is not None and axis.get("xyz", "").strip() in {"0 0 0", "0 0 0.0", "0.0 0.0 0.0"}:
+    #         axis.set("xyz", "1 0 0")
 
     # 3) Links without visuals can create unresolved /visuals/* references in generated USD.
     # Add a tiny marker visual so importer-generated visual references always resolve.
@@ -82,64 +82,64 @@ def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
         ET.SubElement(geometry, "sphere", {"radius": "0.001"})
         ET.SubElement(visual, "material", {"name": "auto_visual_marker"})
 
-    # 4) Ensure all links have valid positive inertial values.
-    # This avoids importer warnings for missing mass or zero/invalid inertia tensors.
-    for link in root.iter("link"):
-        inertial = link.find("inertial")
-        if inertial is None:
-            inertial = ET.SubElement(link, "inertial")
+    # # 4) Ensure all links have valid positive inertial values.
+    # # This avoids importer warnings for missing mass or zero/invalid inertia tensors.
+    # for link in root.iter("link"):
+    #     inertial = link.find("inertial")
+    #     if inertial is None:
+    #         inertial = ET.SubElement(link, "inertial")
 
-        origin = inertial.find("origin")
-        if origin is None:
-            ET.SubElement(inertial, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+    #     origin = inertial.find("origin")
+    #     if origin is None:
+    #         ET.SubElement(inertial, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
 
-        mass_el = inertial.find("mass")
-        mass_ok = False
-        if mass_el is not None:
-            mass_value = _to_float_or_none(mass_el.get("value"))
-            mass_ok = mass_value is not None and mass_value > 0.0
-        if not mass_ok:
-            if mass_el is None:
-                mass_el = ET.SubElement(inertial, "mass")
-            mass_el.set("value", "1e-6")
+    #     mass_el = inertial.find("mass")
+    #     mass_ok = False
+    #     if mass_el is not None:
+    #         mass_value = _to_float_or_none(mass_el.get("value"))
+    #         mass_ok = mass_value is not None and mass_value > 0.0
+    #     if not mass_ok:
+    #         if mass_el is None:
+    #             mass_el = ET.SubElement(inertial, "mass")
+    #         mass_el.set("value", "1e-6")
 
-        inertia_el = inertial.find("inertia")
-        inertia_ok = False
-        if inertia_el is not None:
-            ixx = _to_float_or_none(inertia_el.get("ixx"))
-            iyy = _to_float_or_none(inertia_el.get("iyy"))
-            izz = _to_float_or_none(inertia_el.get("izz"))
-            inertia_ok = (
-                ixx is not None
-                and iyy is not None
-                and izz is not None
-                and ixx > 0.0
-                and iyy > 0.0
-                and izz > 0.0
-            )
-        if not inertia_ok:
-            if inertia_el is None:
-                inertia_el = ET.SubElement(inertial, "inertia")
-            inertia_el.set("ixx", "1e-8")
-            inertia_el.set("iyy", "1e-8")
-            inertia_el.set("izz", "1e-8")
-            inertia_el.set("ixy", "0")
-            inertia_el.set("ixz", "0")
-            inertia_el.set("iyz", "0")
+    #     inertia_el = inertial.find("inertia")
+    #     inertia_ok = False
+    #     if inertia_el is not None:
+    #         ixx = _to_float_or_none(inertia_el.get("ixx"))
+    #         iyy = _to_float_or_none(inertia_el.get("iyy"))
+    #         izz = _to_float_or_none(inertia_el.get("izz"))
+    #         inertia_ok = (
+    #             ixx is not None
+    #             and iyy is not None
+    #             and izz is not None
+    #             and ixx > 0.0
+    #             and iyy > 0.0
+    #             and izz > 0.0
+    #         )
+    #     if not inertia_ok:
+    #         if inertia_el is None:
+    #             inertia_el = ET.SubElement(inertial, "inertia")
+    #         inertia_el.set("ixx", "1e-8")
+    #         inertia_el.set("iyy", "1e-8")
+    #         inertia_el.set("izz", "1e-8")
+    #         inertia_el.set("ixy", "0")
+    #         inertia_el.set("ixz", "0")
+    #         inertia_el.set("iyz", "0")
 
-    # 5) Ensure links have at least one valid collider geometry so mass properties never fall back.
-    for link in root.iter("link"):
-        has_collision_geometry = False
-        for collision in link.findall("collision"):
-            if collision.find("geometry") is not None:
-                has_collision_geometry = True
-                break
-        if has_collision_geometry:
-            continue
-        collision = ET.SubElement(link, "collision")
-        ET.SubElement(collision, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
-        geometry = ET.SubElement(collision, "geometry")
-        ET.SubElement(geometry, "sphere", {"radius": "0.001"})
+    # # 5) Ensure links have at least one valid collider geometry so mass properties never fall back.
+    # for link in root.iter("link"):
+    #     has_collision_geometry = False
+    #     for collision in link.findall("collision"):
+    #         if collision.find("geometry") is not None:
+    #             has_collision_geometry = True
+    #             break
+    #     if has_collision_geometry:
+    #         continue
+    #     collision = ET.SubElement(link, "collision")
+    #     ET.SubElement(collision, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+    #     geometry = ET.SubElement(collision, "geometry")
+    #     ET.SubElement(geometry, "sphere", {"radius": "0.001"})
 
     tree.write(target_urdf, encoding="utf-8", xml_declaration=True)
 
