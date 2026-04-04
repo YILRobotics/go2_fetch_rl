@@ -44,7 +44,10 @@ CMD_LIMIT_ANG_VEL_Z_ABS = 0.4
 
 TRANSITION_STEPS = 10000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
-# HOLD_TIME_S = 0.7 # Time that the cube needs to be stably within the goal radius for the success reward to be granted.
+SUCCESS_CUBE_SPEED_THRESHOLD = 0.05
+SUCCESS_HOLD_TIME_S = 0.6
+SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN = 0.05
+SUCCESS_ROBOT_SPEED_THRESHOLD = 0.15
 
 CUBE_POS_OBS_NOISE_STD = 0.015 # m
 CUBE_VEL_OBS_NOISE_STD = 0.08 # m/s
@@ -548,14 +551,18 @@ class RewardsCfg:
     
     # One time reward
     success_bonus_pretrigger = RewTerm(
-        func=push_mdp.success_trigger_reward,
+        func=push_mdp.success_trigger_reward_robot_outsid_goal,
         weight=50.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
+            "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
+            "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.0,
-            "hold_time_s": 0.0,
+            "cube_speed_threshold": SUCCESS_CUBE_SPEED_THRESHOLD,
+            "cube_in_goal_additional_margin": SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN,
+            "hold_time_s": SUCCESS_HOLD_TIME_S,
+            "robot_speed_threshold": SUCCESS_ROBOT_SPEED_THRESHOLD,
             "transition_steps": TRANSITION_STEPS/2,
         },
     )
@@ -573,6 +580,20 @@ class RewardsCfg:
     #         "transition_steps": TRANSITION_STEPS,
     #     },
     # )
+
+    robot_stop_after_goal = RewTerm(
+        func=push_mdp.robot_stop_after_goal_reward,
+        weight=5.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "cube_cfg": SceneEntityCfg("cube"),
+            "goal_xy": GOAL_XY,
+            "goal_radius": GOAL_RADIUS_M,
+            "cube_in_goal_additional_margin": SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN,
+            "vel_std": 0.05,
+            "transition_steps": TRANSITION_STEPS,
+        },
+    )
 
     # Continous reward
     # cube_in_goal = RewTerm(
@@ -711,10 +732,10 @@ class TerminationsCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "cube_speed_threshold": 0.05,
-            "cube_in_goal_additional_margin": 0.05,  # cube should be a bit more inside the goal area
-            "hold_time_s": 0.2,
-            "robot_speed_threshold": 0.2,
+            "cube_speed_threshold": SUCCESS_CUBE_SPEED_THRESHOLD,
+            "cube_in_goal_additional_margin": SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN,  # cube should be a bit more inside the goal area
+            "hold_time_s": SUCCESS_HOLD_TIME_S,
+            "robot_speed_threshold": SUCCESS_ROBOT_SPEED_THRESHOLD,
         },
     )
     

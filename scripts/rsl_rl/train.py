@@ -58,8 +58,9 @@ parser.add_argument(
     type=float,
     nargs=3,
     # default=[-30.0, 64.0, 4.5],
-    default=[-60.0, 0.0, 7.0],
+    # default=[-60.0, 0.0, 7.0], # good for push task
     # default=[-20.0, 0.0, 5.0], # good for 32 envs
+    default=[-85.0, 0.0, 10.0],
     help="Camera eye position for fixed/follow modes.",
 )
 parser.add_argument(
@@ -67,7 +68,7 @@ parser.add_argument(
     type=float,
     nargs=3,
     # default=[-28.0, 0.0, -20.0],
-    default=[0.0, 0.0, -14.0],
+    default=[0.0, 0.0, -25.0],
     # default=[0.0, 0.0, 0.0], # good for 32 envs
     help="Camera look-at target for fixed/follow modes.",
 )

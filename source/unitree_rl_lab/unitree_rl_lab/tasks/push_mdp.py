@@ -560,6 +560,38 @@ def success_bonus_reward(
 
 
 def success_trigger_reward(
+    # """Compute a one-shot success reward when the task first transitions from unsuccessful to successful.
+
+    # This reward is emitted only on the **False -> True** edge of the success condition
+    # (per environment), not continuously while success remains true. The success condition
+    # is defined by `_goal_hold_success_mask(...)` (cube within goal radius, below speed
+    # threshold, and held for the required duration).
+
+    # The function stores per-environment internal state on `env` to detect transitions:
+
+    # - `_push_prev_success_mask`: previous-step success boolean mask.
+    # - `_push_success_trigger_flag`: current-step one-shot trigger mask.
+    # - `_push_success_trigger_last_step`: guard to avoid recomputation within the same global step.
+
+    # On episode reset (`env.episode_length_buf == 0`), previous success is cleared so a new
+    # success transition can be detected in the new episode.
+
+    # The returned reward is scaled by curriculum factor `_curriculum_alpha(env, transition_steps)`.
+
+    # Args:
+    #     env: Manager-based RL environment containing scene tensors and step counters.
+    #     cube_cfg: Scene entity config used to locate cube state (default: `"cube"`).
+    #     goal_xy: 2D world-frame goal position `(x, y)`.
+    #     goal_radius: Distance threshold for considering cube at goal.
+    #     cube_speed_threshold: Maximum cube speed to count as settled.
+    #     hold_time_s: Required continuous success duration before success is true.
+    #     transition_steps: Number of steps over which curriculum scaling ramps.
+
+    # Returns:
+    #     torch.Tensor: Float tensor of shape `(num_envs,)` with values in `{0.0, alpha}`,
+    #     where `alpha = _curriculum_alpha(env, transition_steps)`. Non-zero only on the
+    #     first step success becomes true for each environment.
+    # """
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     goal_xy: tuple[float, float] = (0.0, 0.0),
@@ -578,24 +610,65 @@ def success_trigger_reward(
         hold_time_s=hold_time_s,
     )
 
-    if (
-        not hasattr(env, "_push_prev_success_mask")
-        or env._push_prev_success_mask.shape[0] != env.num_envs
-    ):
-        env._push_prev_success_mask = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
-        env._push_success_trigger_flag = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
-        env._push_success_trigger_last_step = -1
+    trigger = _one_shot_bool_trigger(env=env, mask=is_success, state_prefix="_push_success_trigger")
+    return _curriculum_alpha(env, transition_steps) * trigger.float()
+
+
+def success_trigger_reward_robot_outsid_goal(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=".*_foot.*"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_speed_threshold: float = 0.05,
+    cube_in_goal_additional_margin: float = 0.15,
+    hold_time_s: float = 1.0,
+    robot_speed_threshold: float = 0.10,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    """One-shot success reward matching the full termination success condition."""
+    is_success = cube_goal_reached_robot_outsid_goal(
+        env=env,
+        cube_cfg=cube_cfg,
+        foot_cfg=foot_cfg,
+        robot_cfg=robot_cfg,
+        goal_xy=goal_xy,
+        goal_radius=goal_radius,
+        cube_speed_threshold=cube_speed_threshold,
+        cube_in_goal_additional_margin=cube_in_goal_additional_margin,
+        hold_time_s=hold_time_s,
+        robot_speed_threshold=robot_speed_threshold,
+    )
+    trigger = _one_shot_bool_trigger(env=env, mask=is_success, state_prefix="_push_success_trigger_robot_outside")
+    return _curriculum_alpha(env, transition_steps) * trigger.float()
+
+
+def _one_shot_bool_trigger(
+    env: ManagerBasedRLEnv,
+    mask: torch.Tensor,
+    state_prefix: str,
+) -> torch.Tensor:
+    prev_name = f"{state_prefix}_prev"
+    flag_name = f"{state_prefix}_flag"
+    last_step_name = f"{state_prefix}_last_step"
+
+    if not hasattr(env, prev_name) or getattr(env, prev_name).shape[0] != env.num_envs:
+        setattr(env, prev_name, torch.zeros(env.num_envs, device=env.device, dtype=torch.bool))
+        setattr(env, flag_name, torch.zeros(env.num_envs, device=env.device, dtype=torch.bool))
+        setattr(env, last_step_name, -1)
 
     current_step = int(env.common_step_counter)
-    if getattr(env, "_push_success_trigger_last_step", -1) != current_step:
+    if getattr(env, last_step_name, -1) != current_step:
+        prev_mask = getattr(env, prev_name)
         reset_mask = env.episode_length_buf == 0
-        env._push_prev_success_mask[reset_mask] = False
+        prev_mask[reset_mask] = False
+        trigger = torch.logical_and(~prev_mask, mask)
+        setattr(env, flag_name, trigger)
+        setattr(env, prev_name, mask.clone())
+        setattr(env, last_step_name, current_step)
 
-        env._push_success_trigger_flag = torch.logical_and(~env._push_prev_success_mask, is_success)
-        env._push_prev_success_mask = is_success.clone()
-        env._push_success_trigger_last_step = current_step
-
-    return _curriculum_alpha(env, transition_steps) * env._push_success_trigger_flag.float()
+    return getattr(env, flag_name)
 
 
 def cube_settled_in_goal_reward(
@@ -728,6 +801,26 @@ def robot_in_goal_area_penalty(
         else:
             schedule = min(1.0, max(0.0, shifted_steps / float(transition_steps)))
     return torch.full((env.num_envs,), schedule, device=env.device) * is_inside.float()
+
+
+def robot_stop_after_goal_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    cube_in_goal_additional_margin: float = 0.15,
+    vel_std: float = 0.08,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    """Reward low robot speed once the cube is clearly inside the goal."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    robot_speed = torch.linalg.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
+    effective_goal_radius = max(1e-3, goal_radius - cube_in_goal_additional_margin)
+    cube_dist = _cube_goal_distance(env, cube_cfg=cube_cfg, goal_xy=goal_xy)
+    cube_in_goal = cube_dist <= effective_goal_radius
+    stop_score = torch.exp(-torch.square(robot_speed) / (vel_std * vel_std))
+    return _curriculum_alpha(env, transition_steps) * cube_in_goal.float() * stop_score
 
 
 def robot_to_cube_approach_progress_reward(

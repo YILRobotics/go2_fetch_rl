@@ -193,7 +193,7 @@ class EventCfg:
         func=mdp.push_by_setting_velocity,
         mode="interval",
         interval_range_s=(5.0, 10.0),
-        params={"velocity_range": {"x": (-0.7, 0.7), "y": (-0.7, 0.7)}},
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
     )
 
 
@@ -385,6 +385,9 @@ class RewardsCfg:
             ),
         },
     )
+    
+    # added by ferdinand later when trying to fix crashing, not in original code
+    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
 
 
 @configclass
