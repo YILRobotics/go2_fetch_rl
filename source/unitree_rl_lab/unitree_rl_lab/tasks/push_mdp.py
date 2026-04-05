@@ -889,7 +889,9 @@ def robot_to_cube_approach_progress_reward(
     gate = (cube_goal_dist > cube_far_distance).float()
     return (1.0 - _curriculum_alpha(env, transition_steps)) * gate * progress
 
-# This function gives a positive reward for the cube moving in the direction of the goal. It computes the velocity of the cube in the XY plane and projects it onto the direction vector from the cube to the goal. Only positive projections (moving towards the goal) are rewarded.
+# This function gives a positive reward for the cube moving in the direction of the goal. It computes
+# the velocity of the cube in the XY plane and projects it onto the direction vector from the cube to
+# the goal. Only positive projections (moving towards the goal) are rewarded.
 def push_direction_reward(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
@@ -942,6 +944,21 @@ def forward_push_reward(
 
     forward_push_intensity = torch.clamp(robot_forward_speed, min=0.0) * torch.clamp(cube_speed, min=0.0)
     return _curriculum_alpha(env, transition_steps) * cube_moving_mask * forward_mask * proximity_mask * forward_push_intensity
+
+
+def backward_body_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    deadzone: float = 0.02,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    """Penalize backward base velocity in robot body frame (x < 0).
+
+    A small deadzone avoids punishing tiny estimator/noise jitter around zero.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    backward_speed = torch.clamp(-robot.data.root_lin_vel_b[:, 0] - deadzone, min=0.0)
+    return _curriculum_alpha(env, transition_steps) * backward_speed
 
 
 def cube_to_nearest_foot_distance_penalty(

@@ -37,7 +37,7 @@ python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --num_envs 32
 ### Unitree-Go2-PushCube-4L Task
 
 ```bash
-python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt --headless --logger wandb --video --video_interval 75 --video_length 300 --log_project_name f_pushcube_4l --run_name test_43
+python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt --headless --logger wandb --video --video_interval 100 --video_length 300 --log_project_name f_pushcube_4l --run_name test_76
 ```
 
 - #### -> policies are saved in `unitree_rl_lab/logs/rsl_rl`
@@ -93,13 +93,13 @@ Why it helps:
 **Use the newest Run:**
 
 ```bash
-python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --num_envs 32
+python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity-4L --num_envs 32
 ```
 
 **Load one specific checkpoint:**
 
 ```bash
-python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --checkpoint logs/rsl_rl/unitree_go2_velocity/2026-03-24_23-52-02/model_13200.pt
+python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity-4L --num_envs 32 --checkpoint logs/rsl_rl/unitree_go2_velocity_4l/2026-04-04_21-30-01_walk_1/model_5000.pt
 ```
 
 ### Unitree-Go2-PushCube-4L Task
@@ -108,8 +108,8 @@ python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity --checkpoint logs/rsl_
 python scripts/rsl_rl/play.py \
   --task Unitree-Go2-PushCube-4L \
   --num_envs 16 \
-  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-04-04_14-57-59_test_69/model_900.pt \
-  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity/2026-03-25_23-05-55_e30_allterain/exported/policy.pt \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-04_21-30-01_walk_1/model_5000.pt \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt \
   --play_reset_mode success_keep_robot
 ```
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
@@ -200,6 +200,11 @@ The foam cube in the extension is configured in:
 
 ---
 
+### Kill a process
+
+```bash
+kill -9 PID # PID = number of process
+```
 
 <br>
 
