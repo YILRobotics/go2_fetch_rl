@@ -40,12 +40,12 @@ CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.02
 CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.4
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.3
 
-SCALE_BACK_VEL = 0.1
-SCALE_SIDE_VEL = 0.3
+SCALE_BACK_VEL = 1.0 # used to reduce use of backward vel but working as good. 
+SCALE_SIDE_VEL = 1.0 # used to reduce use of side vel but working as good
 
-TRANSITION_STEPS = 10000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
+TRANSITION_STEPS = 8000 # number of common steps (total steps / num_envs) over which to linearly transition the reward from dense to sparse.
 
 SUCCESS_CUBE_SPEED_THRESHOLD = 0.05
 SUCCESS_HOLD_TIME_S = 0.6
@@ -396,7 +396,7 @@ class CommandsCfg:
         debug_vis=False, # Show velocity arrow over the robot
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-CMD_INIT_LIN_VEL_ABS*SCALE_BACK_VEL, CMD_INIT_LIN_VEL_ABS), # forward / backward
-            lin_vel_y=(-CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL, CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL), # left / right
+            lin_vel_y=(-CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL, CMD_INIT_LIN_VEL_ABS*SCALE_SIDE_VEL), # right / left
             ang_vel_z=(-CMD_INIT_ANG_VEL_ABS, CMD_INIT_ANG_VEL_ABS),
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
@@ -668,7 +668,7 @@ class RewardsCfg:
     # until max_distance 0 penatly, after, linearly increasing penalty.
     cube_to_leg_distance_penalty = RewTerm( 
         func=push_mdp.cube_to_nearest_foot_distance_penalty,
-        weight=-4.0,
+        weight=-4.4,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names=".*_foot.*"),
             "cube_cfg": SceneEntityCfg("cube"),
@@ -687,6 +687,16 @@ class RewardsCfg:
             "transition_steps": TRANSITION_STEPS,
         },
     )
+
+    # backward_body_velocity_penalty = RewTerm(
+    #     func=push_mdp.backward_body_velocity_penalty,
+    #     weight=-0.001,
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "deadzone": 0.04,
+    #         "transition_steps": TRANSITION_STEPS,
+    #     },
+    # )
 
     robot_in_goal_area = RewTerm(
         func=push_mdp.robot_in_goal_area_penalty,

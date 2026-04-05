@@ -34,24 +34,24 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
     sub_terrains={
         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.1, noise_range=(0.01, 0.05), noise_step=0.01, border_width=0.25
+            proportion=0.1, noise_range=(0.01, 0.06), noise_step=0.01, border_width=0.25
         ),
         "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
             proportion=0.1,
-            slope_range=(0.0, 0.2),
+            slope_range=(0.0, 0.4),
             platform_width=2.0,
             border_width=0.25,
         ),
         "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
             proportion=0.1,
-            slope_range=(0.0, 0.2),
+            slope_range=(0.0, 0.4),
             platform_width=2.0,
             border_width=0.25,
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.1,
             grid_width=0.45,
-            grid_height_range=(0.01, 0.02),
+            grid_height_range=(0.02, 0.15),
             platform_width=2.0,
         ),
         # "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
@@ -150,14 +150,12 @@ class EventCfg:
         },
     )
 
-    # reset
+    # change at reset and apply the whole episode
     base_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            # "force_range": (-2.5, 2.5),
-            # "torque_range": (-0.5, 0.5),
             "force_range": (0.0, 0.0),
             "torque_range": (0.0, 0.0),
         },
@@ -193,7 +191,7 @@ class EventCfg:
         func=mdp.push_by_setting_velocity,
         mode="interval",
         interval_range_s=(5.0, 10.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+        params={"velocity_range": {"x": (-0.7, 0.7), "y": (-0.7, 0.7)}},
     )
 
 
@@ -385,9 +383,6 @@ class RewardsCfg:
             ),
         },
     )
-    
-    # added by ferdinand later when trying to fix crashing, not in original code
-    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
 
 
 @configclass
