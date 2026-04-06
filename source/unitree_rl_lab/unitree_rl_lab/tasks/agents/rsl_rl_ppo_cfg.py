@@ -13,7 +13,7 @@ from isaaclab_rl.rsl_rl import (
 
 @configclass
 class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 32 # default: 24 # number of rollout steps to collect per environment before updating the policy
+    num_steps_per_env = 24 # default: 24 # number of rollout steps to collect per environment before updating the policy
     max_iterations = 10000 
     save_interval = 1000 # save checkpoint
     experiment_name = ""

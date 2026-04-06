@@ -38,9 +38,9 @@ CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.02
-CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
-CMD_LIMIT_LIN_VEL_Y_ABS = 0.6
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.3
+CMD_LIMIT_LIN_VEL_X_ABS = 0.5 # Final limit
+CMD_LIMIT_LIN_VEL_Y_ABS = 0.5
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.25
 
 SCALE_BACK_VEL = 1.0 # used to reduce use of backward vel but working as good. 
 SCALE_SIDE_VEL = 1.0 # used to reduce use of side vel but working as good
