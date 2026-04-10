@@ -7,6 +7,7 @@ category = "Examples"
 [dependencies]
 "isaacsim.examples.interactive" = {}
 "isaacsim.examples.browser" = {}
+"isaacsim.asset.importer.urdf" = {}
 "omni.kit.uiapp" = {}
 
 [[python.module]]

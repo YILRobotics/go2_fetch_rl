@@ -1,9 +1,21 @@
 import math
+import os
+import re
+import shutil
+import xml.etree.ElementTree as ET
 
+import numpy as np
+import omni.kit.commands
 import omni.usd
+from isaacsim.asset.importer.urdf import _urdf
 from isaacsim.core.api import World
+from isaacsim.core.prims import SingleArticulation
+from isaacsim.core.utils.types import ArticulationAction
 from isaacsim.examples.interactive.base_sample import BaseSample
 from pxr import Gf, Sdf, PhysxSchema, UsdGeom, UsdLux, UsdPhysics
+
+UNITREE_ROS_DIR = "/home/ferdinand/fetchrobot/unitree_ros"
+DEFAULT_GO2_URDF_PATH = f"{UNITREE_ROS_DIR}/robots/go2_description/urdf/go2_description.urdf"
 
 
 def set_translate(xformable, xyz):
@@ -127,9 +139,9 @@ def create_revolute_joint(
     drive.CreateTypeAttr("force")
     drive.CreateTargetPositionAttr(0.0)
     drive.CreateTargetVelocityAttr(0.0)
-    drive.CreateStiffnessAttr(25.0)
-    drive.CreateDampingAttr(6.0)
-    drive.CreateMaxForceAttr(500.0)
+    drive.CreateStiffnessAttr(14.0) # spring gain
+    drive.CreateDampingAttr(1.8) # damping gain
+    drive.CreateMaxForceAttr(60.0) # force limit 
 
     joint_state = PhysxSchema.JointStateAPI.Apply(joint.GetPrim(), UsdPhysics.Tokens.angular)
     joint_state.CreatePositionAttr(0.0)
@@ -138,17 +150,95 @@ def create_revolute_joint(
     return joint, drive, joint_state
 
 
+def _sanitize_usd_identifier(name: str, fallback: str = "material") -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    if not sanitized:
+        sanitized = fallback
+    if not re.match(r"[A-Za-z_]", sanitized[0]):
+        sanitized = f"a_{sanitized}"
+    return sanitized
+
+
+def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
+    tree = ET.parse(source_urdf)
+    root = tree.getroot()
+
+    # URDF importer expects one material binding per visual.
+    # Some Unitree URDF visuals contain multiple material tags; keep the first.
+    for visual in root.iter("visual"):
+        materials = [child for child in list(visual) if child.tag == "material"]
+        for extra_material in materials[1:]:
+            visual.remove(extra_material)
+
+    used_material_names = {}
+    for material in root.iter("material"):
+        name = material.get("name")
+        if not name:
+            continue
+        base_name = _sanitize_usd_identifier(name, fallback="material")
+        suffix = used_material_names.get(base_name, 0)
+        unique_name = base_name if suffix == 0 else f"{base_name}_{suffix}"
+        used_material_names[base_name] = suffix + 1
+        material.set("name", unique_name)
+
+    for link in root.iter("link"):
+        if link.find("visual") is not None:
+            continue
+        visual = ET.SubElement(link, "visual")
+        ET.SubElement(visual, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+        geometry = ET.SubElement(visual, "geometry")
+        ET.SubElement(geometry, "sphere", {"radius": "0.001"})
+        ET.SubElement(visual, "material", {"name": "auto_visual_marker"})
+
+    tree.write(target_urdf, encoding="utf-8", xml_declaration=True)
+
+
+def _prepare_sanitized_urdf_asset(source_urdf: str) -> str:
+    urdf_abs = os.path.abspath(source_urdf)
+    urdf_dir = os.path.dirname(urdf_abs)
+    package_dir = os.path.dirname(urdf_dir)
+    package_name = os.path.basename(package_dir)
+
+    tmp_root = "/tmp/IsaacLab/unitree_rl_lab/urdf_sanitized"
+    tmp_package_dir = os.path.join(tmp_root, package_name)
+    tmp_urdf_dir = os.path.join(tmp_package_dir, "urdf")
+    tmp_urdf_path = os.path.join(tmp_urdf_dir, os.path.basename(urdf_abs))
+
+    if os.path.exists(tmp_package_dir):
+        if os.path.islink(tmp_package_dir) or os.path.isfile(tmp_package_dir):
+            os.remove(tmp_package_dir)
+        else:
+            shutil.rmtree(tmp_package_dir)
+
+    os.makedirs(tmp_urdf_dir, exist_ok=True)
+
+    for entry in os.listdir(package_dir):
+        if entry == "urdf":
+            continue
+        src = os.path.join(package_dir, entry)
+        dst = os.path.join(tmp_package_dir, entry)
+        os.symlink(src, dst)
+
+    _sanitize_urdf_copy(urdf_abs, tmp_urdf_path)
+    return tmp_urdf_path
+
+
 class LightSwitchSample(BaseSample):
-    ON_ANGLE_DEG = 11.0
-    OFF_ANGLE_DEG = -11.0
-    SWITCH_THRESHOLD_DEG = 3.0
+    ON_ANGLE_DEG = 9.0
+    OFF_ANGLE_DEG = -9.0
+    SWITCH_ON_THRESHOLD_DEG = 1.0
+    SWITCH_OFF_THRESHOLD_DEG = -1.0
+    SNAP_BOOST_VEL_DEG_S = 60.0
+    SNAP_BOOST_TIME_S = 0.10
 
     LIGHT_ON_INTENSITY = 25000.0
     LIGHT_OFF_INTENSITY = 0.0
 
     def __init__(self) -> None:
         super().__init__()
-        self._physics_callback_name = "lightswitch_step"
+        self._physics_callback_name = f"lightswitch_step_{id(self)}"
+        self._physics_callback_registered = False
         self._world = None
         self._sim_t = 0.0
 
@@ -156,9 +246,124 @@ class LightSwitchSample(BaseSample):
         self._hinge_state = None
         self._light = None
         self._finger_xf = None
+        self._go2 = None
+        self._go2_stance_positions = None
+        self._go2_stance_velocities = None
+        self._go2_pose_reapply_steps = 0
 
         self._target_angle_deg = self.OFF_ANGLE_DEG
         self._light_on = False
+        self._snap_boost_time_left_s = 0.0
+
+        # Disable the demo finger by default so the interactive force tool can push freely.
+        self._demo_finger_enabled = os.environ.get("LIGHTSWITCH_DEMO_FINGER", "1") == "1"
+
+    def _compute_go2_default_pose(self):
+        if self._go2 is None:
+            return None, None
+
+        dof_names = list(self._go2.dof_names)
+        if not dof_names:
+            return None, None
+
+        positions = np.zeros((len(dof_names),), dtype=np.float32)
+        velocities = np.zeros((len(dof_names),), dtype=np.float32)
+
+        for idx, name in enumerate(dof_names):
+            if re.match(r".*R_hip_joint$", name):
+                positions[idx] = -0.1
+            elif re.match(r".*L_hip_joint$", name):
+                positions[idx] = 0.1
+            elif re.match(r"F[L,R]_thigh_joint$", name):
+                positions[idx] = 0.8
+            elif re.match(r"R[L,R]_thigh_joint$", name):
+                positions[idx] = 1.0
+            elif re.match(r".*_calf_joint$", name):
+                positions[idx] = -1.5
+
+        return positions, velocities
+
+    def _apply_go2_default_pose(self):
+        positions, velocities = self._compute_go2_default_pose()
+        if positions is None:
+            return
+
+        self._go2_stance_positions = positions
+        self._go2_stance_velocities = velocities
+
+        try:
+            # Keep reset behavior deterministic across Stop/Play.
+            self._go2.set_joints_default_state(positions=positions, velocities=velocities)
+        except Exception as exc:
+            print(f"WARNING: Failed to set GO2 default joint state: {exc}")
+
+        try:
+            if not self._go2.handles_initialized:
+                self._go2.initialize()
+        except Exception:
+            return
+
+        self._apply_go2_pose_targets()
+
+    def _apply_go2_pose_targets(self):
+        if self._go2 is None or self._go2_stance_positions is None:
+            return
+        try:
+            if not self._go2.handles_initialized:
+                return
+
+            self._go2.set_joint_positions(self._go2_stance_positions)
+            self._go2.set_joint_velocities(self._go2_stance_velocities)
+            self._go2.apply_action(
+                ArticulationAction(
+                    joint_positions=self._go2_stance_positions,
+                    joint_velocities=self._go2_stance_velocities,
+                )
+            )
+        except Exception:
+            return
+
+    def _load_go2_from_urdf(self, world):
+        urdf_source_path = os.environ.get("GO2_URDF_PATH", DEFAULT_GO2_URDF_PATH)
+        if not os.path.isfile(urdf_source_path):
+            print(f"ERROR: GO2 URDF not found: {urdf_source_path}")
+            return
+
+        urdf_path = _prepare_sanitized_urdf_asset(urdf_source_path)
+
+        import_config = _urdf.ImportConfig()
+        import_config.fix_base = False
+        import_config.make_default_prim = True
+        import_config.merge_fixed_joints = False
+        import_config.import_inertia_tensor = True
+
+        parse_ok, robot_model = omni.kit.commands.execute(
+            "URDFParseFile",
+            urdf_path=urdf_path,
+            import_config=import_config,
+        )
+        if not parse_ok or robot_model is None:
+            print(f"ERROR: Failed to parse GO2 URDF: {urdf_path}")
+            return
+
+        import_ok, prim_path = omni.kit.commands.execute(
+            "URDFImportRobot",
+            urdf_path=urdf_path,
+            urdf_robot=robot_model,
+            import_config=import_config,
+        )
+        if not import_ok or not prim_path:
+            print("ERROR: Failed to import GO2 URDF robot into stage")
+            return
+
+        self._go2 = world.scene.add(
+            SingleArticulation(
+                prim_path=prim_path,
+                name="go2_robot",
+                position=np.array([0.0, 0.0, 0.4]),
+            )
+        )
+        print(f"GO2 robot loaded from URDF: {urdf_source_path}")
 
     def setup_scene(self):
         world = World.instance()
@@ -235,16 +440,25 @@ class LightSwitchSample(BaseSample):
         )
         self._finger_xf = UsdGeom.Xformable(finger_prim)
 
+        self._load_go2_from_urdf(world)
+
         self._target_angle_deg = self.OFF_ANGLE_DEG
         self._hinge_drive.GetTargetPositionAttr().Set(self._target_angle_deg)
+        self._hinge_drive.GetTargetVelocityAttr().Set(0.0)
         self._light_on = False
         self._set_light(False)
         self._sim_t = 0.0
+        self._snap_boost_time_left_s = 0.0
 
     async def setup_post_load(self):
         self._world = self.get_world()
-        self._remove_physics_callback()
-        self._world.add_physics_callback(self._physics_callback_name, self._on_physics_step)
+        try:
+            self._go2 = self._world.scene.get_object("go2_robot")
+        except Exception:
+            pass
+        self._apply_go2_default_pose()
+        self._go2_pose_reapply_steps = 240
+        self._register_physics_callback()
 
     async def setup_pre_reset(self):
         self._remove_physics_callback()
@@ -256,21 +470,31 @@ class LightSwitchSample(BaseSample):
 
         if self._hinge_drive is not None:
             self._hinge_drive.GetTargetPositionAttr().Set(self._target_angle_deg)
+            self._hinge_drive.GetTargetVelocityAttr().Set(0.0)
         self._set_light(False)
+        self._apply_go2_default_pose()
+        self._go2_pose_reapply_steps = 240
+        self._snap_boost_time_left_s = 0.0
 
-        if self._world is not None:
-            self._world.add_physics_callback(self._physics_callback_name, self._on_physics_step)
+        self._register_physics_callback()
 
     def world_cleanup(self):
         self._remove_physics_callback()
 
+    def _register_physics_callback(self):
+        if self._world is None or self._physics_callback_registered:
+            return
+        self._world.add_physics_callback(self._physics_callback_name, self._on_physics_step)
+        self._physics_callback_registered = True
+
     def _remove_physics_callback(self):
-        if self._world is None:
+        if self._world is None or not self._physics_callback_registered:
             return
         try:
             self._world.remove_physics_callback(self._physics_callback_name)
         except Exception:
             pass
+        self._physics_callback_registered = False
 
     def _set_light(self, on: bool):
         if self._light is None:
@@ -292,43 +516,72 @@ class LightSwitchSample(BaseSample):
         if self._finger_xf is None or self._hinge_state is None or self._hinge_drive is None:
             return
 
-        period = 4.0
-        phase = (self._sim_t % period) / period
+        if self._go2_pose_reapply_steps > 0:
+            self._apply_go2_pose_targets()
+            self._go2_pose_reapply_steps -= 1
 
-        if phase < 0.5:
-            z = 1.04
-            local = phase / 0.5
+        if self._demo_finger_enabled:
+            period = 4.0
+            phase = (self._sim_t % period) / period
+
+            if phase < 0.5:
+                z = 1.04
+                local = phase / 0.5
+            else:
+                z = 0.96
+                local = (phase - 0.5) / 0.5
+
+            # Finger motion profile in Y:
+            # - approach from `approach_y` toward the switch,
+            # - hold at `press_y` to maintain contact,
+            # - retreat back to `approach_y`.
+            # More negative Y means deeper press into the rocker.
+            approach_y = 0.15
+            press_y = 0.045
+
+            if local < 0.25:
+                # Approach phase: linearly move inward.
+                y = approach_y + (press_y - approach_y) * (local / 0.25)
+            elif local < 0.75:
+                # Hold phase: keep full press depth.
+                y = press_y
+            else:
+                # Retreat phase: linearly move back out.
+                y = press_y + (approach_y - press_y) * ((local - 0.75) / 0.25)
+
+            set_translate(self._finger_xf, (0.0, y, z))
         else:
-            z = 0.96
-            local = (phase - 0.5) / 0.5
-
-        if local < 0.25:
-            y = 0.10 - 0.05 * (local / 0.25)
-        elif local < 0.75:
-            y = 0.05
-        else:
-            y = 0.05 + 0.05 * ((local - 0.75) / 0.25)
-
-        set_translate(self._finger_xf, (0.0, y, z))
+            # Park finger away from the switch when using interactive force tool.
+            set_translate(self._finger_xf, (0.0, 0.16, 1.12))
 
         joint_angle_deg = float(self._hinge_state.GetPositionAttr().Get())
         joint_vel_deg_s = float(self._hinge_state.GetVelocityAttr().Get())
 
-        if joint_angle_deg > self.SWITCH_THRESHOLD_DEG and self._target_angle_deg != self.ON_ANGLE_DEG:
+        # Bistable latch: switch changes state only after crossing signed thresholds.
+        if (not self._light_on) and joint_angle_deg > self.SWITCH_ON_THRESHOLD_DEG:
             self._target_angle_deg = self.ON_ANGLE_DEG
             self._hinge_drive.GetTargetPositionAttr().Set(self._target_angle_deg)
+            self._hinge_drive.GetTargetVelocityAttr().Set(self.SNAP_BOOST_VEL_DEG_S)
+            self._snap_boost_time_left_s = self.SNAP_BOOST_TIME_S
             self._light_on = True
             self._set_light(True)
             print(
                 f"[{self._sim_t:6.2f}s] SWITCH -> ON   q={joint_angle_deg:6.2f} deg  dq={joint_vel_deg_s:7.2f} deg/s"
             )
-        elif joint_angle_deg < -self.SWITCH_THRESHOLD_DEG and self._target_angle_deg != self.OFF_ANGLE_DEG:
+        elif self._light_on and joint_angle_deg < self.SWITCH_OFF_THRESHOLD_DEG:
             self._target_angle_deg = self.OFF_ANGLE_DEG
             self._hinge_drive.GetTargetPositionAttr().Set(self._target_angle_deg)
+            self._hinge_drive.GetTargetVelocityAttr().Set(-self.SNAP_BOOST_VEL_DEG_S)
+            self._snap_boost_time_left_s = self.SNAP_BOOST_TIME_S
             self._light_on = False
             self._set_light(False)
             print(
                 f"[{self._sim_t:6.2f}s] SWITCH -> OFF  q={joint_angle_deg:6.2f} deg  dq={joint_vel_deg_s:7.2f} deg/s"
             )
+
+        if self._snap_boost_time_left_s > 0.0:
+            self._snap_boost_time_left_s -= float(step_size)
+            if self._snap_boost_time_left_s <= 0.0:
+                self._hinge_drive.GetTargetVelocityAttr().Set(0.0)
 
         self._sim_t += float(step_size)
