@@ -10,6 +10,7 @@ sudo apt install tree -y
 sudo apt install htop -y
 
 sudo apt install ros-humble-librealsense2*
+sudo apt install ros-humble-realsense2-camera
 ```
 
 

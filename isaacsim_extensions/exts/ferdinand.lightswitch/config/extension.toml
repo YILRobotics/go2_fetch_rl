@@ -1,0 +1,14 @@
+[package]
+version = "0.1.0"
+title = "Light Switch Demo"
+description = "Isaac Sim extension for a bistable German rocker light switch demo"
+category = "Examples"
+
+[dependencies]
+"isaacsim.examples.interactive" = {}
+"isaacsim.examples.browser" = {}
+"omni.kit.uiapp" = {}
+
+[[python.module]]
+name = "ferdinand.lightswitch"
+path = "python"

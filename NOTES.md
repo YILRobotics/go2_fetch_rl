@@ -1,4 +1,4 @@
-## How can i do if i would want the robot to be able to use both feet  to push the cube? what whould i need to change?
+## How can i do if i would want the robot to be able to use both feet to push the cube? what whould i need to change?
 
 
 • Mainly three things.

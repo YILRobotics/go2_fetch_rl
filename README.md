@@ -13,6 +13,8 @@ conda activate isaac_lab_alessandro
 or
 conda activate isaac_lab
 ```
+### ⚠️ DO NOT CONDA INIT
+Do not run `conda init` or uncomment conda initialization in `.bashrc` or add it to your PATH, as it interferes with ROS2.
 
 ## Training
 
@@ -108,7 +110,7 @@ python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity-4L --num_envs 32 --che
 python scripts/rsl_rl/play.py \
   --task Unitree-Go2-PushCube-4L \
   --num_envs 16 \
-  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-04_21-30-01_walk_1/model_5000.pt \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-04-05_21-11-33_test_77/model_2399.pt \
   --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt \
   --play_reset_mode success_keep_robot
 ```
