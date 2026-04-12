@@ -45,6 +45,18 @@ def set_orient_quat(xformable, quat_wxyz):
     return op
 
 
+def set_scale(xformable, xyz):
+    op = None
+    for candidate in xformable.GetOrderedXformOps():
+        if candidate.GetOpType() == UsdGeom.XformOp.TypeScale:
+            op = candidate
+            break
+    if op is None:
+        op = xformable.AddScaleOp()
+    op.Set(Gf.Vec3f(*xyz))
+    return op
+
+
 def create_box_body(
     stage,
     body_path: str,
@@ -62,7 +74,7 @@ def create_box_body(
     cube.CreateSizeAttr(1.0)
 
     cube_xf = UsdGeom.Xformable(cube.GetPrim())
-    cube_xf.AddScaleOp().Set(Gf.Vec3f(*size_xyz))
+    set_scale(cube_xf, size_xyz)
     cube.CreateDisplayColorAttr([Gf.Vec3f(*color_rgb)])
 
     rb = UsdPhysics.RigidBodyAPI.Apply(body_xf.GetPrim())
@@ -94,7 +106,7 @@ def create_static_box(stage, path, size_xyz, position_xyz, color_rgb=(0.2, 0.2, 
     cube = UsdGeom.Cube.Define(stage, f"{path}/geom")
     cube.CreateSizeAttr(1.0)
     cube_xf = UsdGeom.Xformable(cube.GetPrim())
-    cube_xf.AddScaleOp().Set(Gf.Vec3f(*size_xyz))
+    set_scale(cube_xf, size_xyz)
     cube.CreateDisplayColorAttr([Gf.Vec3f(*color_rgb)])
 
     UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
@@ -140,7 +152,7 @@ def create_revolute_joint(
     drive.CreateTargetPositionAttr(0.0)
     drive.CreateTargetVelocityAttr(0.0)
     drive.CreateStiffnessAttr(14.0) # spring gain
-    drive.CreateDampingAttr(1.8) # damping gain
+    drive.CreateDampingAttr(2.0) # damping gain
     drive.CreateMaxForceAttr(60.0) # force limit 
 
     joint_state = PhysxSchema.JointStateAPI.Apply(joint.GetPrim(), UsdPhysics.Tokens.angular)
@@ -158,6 +170,15 @@ def _sanitize_usd_identifier(name: str, fallback: str = "material") -> str:
     if not re.match(r"[A-Za-z_]", sanitized[0]):
         sanitized = f"a_{sanitized}"
     return sanitized
+
+
+def _to_float_or_none(value: str | None):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
@@ -184,12 +205,67 @@ def _sanitize_urdf_copy(source_urdf: str, target_urdf: str):
 
     for link in root.iter("link"):
         if link.find("visual") is not None:
-            continue
-        visual = ET.SubElement(link, "visual")
-        ET.SubElement(visual, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
-        geometry = ET.SubElement(visual, "geometry")
-        ET.SubElement(geometry, "sphere", {"radius": "0.001"})
-        ET.SubElement(visual, "material", {"name": "auto_visual_marker"})
+            pass
+        else:
+            visual = ET.SubElement(link, "visual")
+            ET.SubElement(visual, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+            geometry = ET.SubElement(visual, "geometry")
+            ET.SubElement(geometry, "sphere", {"radius": "0.001"})
+            ET.SubElement(visual, "material", {"name": "auto_visual_marker"})
+
+        # Ensure every link has valid inertial data (positive mass + inertia tensor).
+        inertial = link.find("inertial")
+        if inertial is None:
+            inertial = ET.SubElement(link, "inertial")
+            ET.SubElement(inertial, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+            ET.SubElement(inertial, "mass", {"value": "1e-6"})
+            ET.SubElement(
+                inertial,
+                "inertia",
+                {"ixx": "1e-8", "iyy": "1e-8", "izz": "1e-8", "ixy": "0", "ixz": "0", "iyz": "0"},
+            )
+        else:
+            if inertial.find("origin") is None:
+                ET.SubElement(inertial, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+
+            mass_el = inertial.find("mass")
+            mass_ok = False
+            if mass_el is not None:
+                mass_v = _to_float_or_none(mass_el.get("value"))
+                mass_ok = mass_v is not None and mass_v > 0.0
+            if not mass_ok:
+                if mass_el is None:
+                    mass_el = ET.SubElement(inertial, "mass")
+                mass_el.set("value", "1e-6")
+
+            inertia_el = inertial.find("inertia")
+            inertia_ok = False
+            if inertia_el is not None:
+                ixx = _to_float_or_none(inertia_el.get("ixx"))
+                iyy = _to_float_or_none(inertia_el.get("iyy"))
+                izz = _to_float_or_none(inertia_el.get("izz"))
+                inertia_ok = ixx is not None and iyy is not None and izz is not None and ixx > 0.0 and iyy > 0.0 and izz > 0.0
+            if not inertia_ok:
+                if inertia_el is None:
+                    inertia_el = ET.SubElement(inertial, "inertia")
+                inertia_el.set("ixx", "1e-8")
+                inertia_el.set("iyy", "1e-8")
+                inertia_el.set("izz", "1e-8")
+                inertia_el.set("ixy", "0")
+                inertia_el.set("ixz", "0")
+                inertia_el.set("iyz", "0")
+
+        # Ensure every link has at least one collider so mass properties can be computed robustly.
+        has_collision_geom = False
+        for col in link.findall("collision"):
+            if col.find("geometry") is not None:
+                has_collision_geom = True
+                break
+        if not has_collision_geom:
+            collision = ET.SubElement(link, "collision")
+            ET.SubElement(collision, "origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+            geometry = ET.SubElement(collision, "geometry")
+            ET.SubElement(geometry, "sphere", {"radius": "0.001"})
 
     tree.write(target_urdf, encoding="utf-8", xml_declaration=True)
 
@@ -225,6 +301,10 @@ def _prepare_sanitized_urdf_asset(source_urdf: str) -> str:
 
 
 class LightSwitchSample(BaseSample):
+    SWITCH_WORLD_X = 0.45
+    SWITCH_WORLD_Y = 0.0
+    SWITCH_WORLD_Z = 1.0
+
     ON_ANGLE_DEG = 9.0
     OFF_ANGLE_DEG = -9.0
     SWITCH_ON_THRESHOLD_DEG = 1.0
@@ -373,7 +453,9 @@ class LightSwitchSample(BaseSample):
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
 
         switch_root = UsdGeom.Xform.Define(stage, "/World/Switch")
-        set_translate(switch_root, (0.0, 0.0, 1.0))
+        set_translate(switch_root, (self.SWITCH_WORLD_X, self.SWITCH_WORLD_Y, self.SWITCH_WORLD_Z))
+        # Rotate switch 90 deg about Z so the front faces toward the robot.
+        set_orient_quat(switch_root, (math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)))
 
         UsdPhysics.ArticulationRootAPI.Apply(switch_root.GetPrim())
         PhysxSchema.PhysxArticulationAPI.Apply(switch_root.GetPrim())
@@ -382,15 +464,14 @@ class LightSwitchSample(BaseSample):
             stage,
             "/World/Wall",
             size_xyz=(0.05, 0.40, 0.40),
-            position_xyz=(0.0, -0.036, 1.0),
+            position_xyz=(self.SWITCH_WORLD_X + 0.036, self.SWITCH_WORLD_Y, self.SWITCH_WORLD_Z),
             color_rgb=(0.85, 0.85, 0.88),
-            orient_quat_wxyz=(math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)),
         )
 
         create_box_body(
             stage,
             "/World/Switch/base",
-            size_xyz=(0.08, 0.02, 0.12),
+            size_xyz=(0.05, 0.010, 0.05),
             position_xyz=(0.0, 0.0, 0.0),
             color_rgb=(0.95, 0.95, 0.95),
             mass=0.5,
@@ -400,8 +481,8 @@ class LightSwitchSample(BaseSample):
         create_box_body(
             stage,
             "/World/Switch/rocker",
-            size_xyz=(0.07, 0.015, 0.11),
-            position_xyz=(0.0, 0.018, 0.0),
+            size_xyz=(0.044, 0.007, 0.044),
+            position_xyz=(0.0, 0.009, 0.0),
             color_rgb=(0.92, 0.92, 0.92),
             mass=0.08,
             kinematic=False,
@@ -414,8 +495,8 @@ class LightSwitchSample(BaseSample):
             joint_path="/World/Switch/hinge",
             body0_path="/World/Switch/base",
             body1_path="/World/Switch/rocker",
-            local_pos0=(0.0, 0.015, 0.0),
-            local_pos1=(0.0, -0.003, 0.0),
+            local_pos0=(0.0, 0.0055, 0.0),
+            local_pos1=(0.0, -0.0035, 0.0),
             axis="X",
             lower_deg=-15.0,
             upper_deg=15.0,
@@ -433,7 +514,7 @@ class LightSwitchSample(BaseSample):
             stage,
             "/World/Finger",
             size_xyz=(0.02, 0.04, 0.02),
-            position_xyz=(0.0, 0.10, 1.04),
+            position_xyz=(self.SWITCH_WORLD_X - 0.12, self.SWITCH_WORLD_Y, self.SWITCH_WORLD_Z + 0.012),
             color_rgb=(0.25, 0.55, 0.95),
             mass=0.1,
             kinematic=True,
@@ -525,34 +606,33 @@ class LightSwitchSample(BaseSample):
             phase = (self._sim_t % period) / period
 
             if phase < 0.5:
-                z = 1.04
+                z = self.SWITCH_WORLD_Z + 0.012
                 local = phase / 0.5
             else:
-                z = 0.96
+                z = self.SWITCH_WORLD_Z - 0.012
                 local = (phase - 0.5) / 0.5
 
-            # Finger motion profile in Y:
-            # - approach from `approach_y` toward the switch,
-            # - hold at `press_y` to maintain contact,
-            # - retreat back to `approach_y`.
-            # More negative Y means deeper press into the rocker.
-            approach_y = 0.15
-            press_y = 0.045
+            # Finger motion profile in X (switch was rotated 90 deg about Z):
+            # - approach from `approach_x` toward the switch,
+            # - hold at `press_x` to maintain contact,
+            # - retreat back to `approach_x`.
+            approach_x = self.SWITCH_WORLD_X - 0.15
+            press_x = self.SWITCH_WORLD_X - 0.005
 
             if local < 0.25:
                 # Approach phase: linearly move inward.
-                y = approach_y + (press_y - approach_y) * (local / 0.25)
+                x = approach_x + (press_x - approach_x) * (local / 0.25)
             elif local < 0.75:
                 # Hold phase: keep full press depth.
-                y = press_y
+                x = press_x
             else:
                 # Retreat phase: linearly move back out.
-                y = press_y + (approach_y - press_y) * ((local - 0.75) / 0.25)
+                x = press_x + (approach_x - press_x) * ((local - 0.75) / 0.25)
 
-            set_translate(self._finger_xf, (0.0, y, z))
+            set_translate(self._finger_xf, (x, self.SWITCH_WORLD_Y, z))
         else:
             # Park finger away from the switch when using interactive force tool.
-            set_translate(self._finger_xf, (0.0, 0.16, 1.12))
+            set_translate(self._finger_xf, (self.SWITCH_WORLD_X - 0.18, self.SWITCH_WORLD_Y, self.SWITCH_WORLD_Z + 0.12))
 
         joint_angle_deg = float(self._hinge_state.GetPositionAttr().Get())
         joint_vel_deg_s = float(self._hinge_state.GetVelocityAttr().Get())

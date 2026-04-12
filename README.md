@@ -90,6 +90,18 @@ Why it helps:
 - At large `num_envs` this can improve `Steps per second` without changing the PPO/task logic.
 
 
+
+### Unitree-Go2-LightSwitch-4L Task
+
+```bash
+python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --num_envs 16
+```
+
+```bash
+python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --headless --logger wandb --video --video_interval 75 --video_length 300 --log_project_name f_lightswitch_test --run_name test_1
+```
+  
+
 ## Play/Inference
 
 **Use the newest Run:**

@@ -46,3 +46,24 @@
 
   If you want, I can implement the symmetric two-front-feet version directly in your push env
   now.
+
+
+  ---
+
+On your machine, I found it here:
+
+/home/ferdinand/.local/share/ov/pkg/hub-2.0.0/target/release/hub
+
+For OMNICLIENT_HUB_EXE, set the directory (not the binary file):
+
+export OMNICLIENT_HUB_EXE=/home/ferdinand/.local/share/ov/pkg/hub-2.0.0/target/release
+
+Quick verify:
+
+ls -l "$OMNICLIENT_HUB_EXE/hub"
+
+Then run training in the same shell.
+
+If you want to re-find it later:
+
+find ~/.local/share/ov/pkg -type f -name hub 2>/dev/null

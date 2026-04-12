@@ -38,3 +38,21 @@ _safe_register(
         "rsl_rl_cfg_entry_point": "unitree_rl_lab.tasks.agents.rsl_rl_push_ppo_cfg:PushPPORunnerCfg",
     },
 )
+
+_safe_register(
+    "Unitree-Go2-LightSwitch-4L",
+    {
+        "env_cfg_entry_point": f"{__name__}.lightswitch_env_cfg:RobotLightSwitchEnvCfg",
+        "play_env_cfg_entry_point": f"{__name__}.lightswitch_env_cfg:RobotLightSwitchPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "unitree_rl_lab.tasks.agents.rsl_rl_lightswitch_ppo_cfg:LightSwitchPPORunnerCfg",
+    },
+)
+
+_safe_register(
+    "unitree-go2-lightswitch",
+    {
+        "env_cfg_entry_point": f"{__name__}.lightswitch_env_cfg:RobotLightSwitchEnvCfg",
+        "play_env_cfg_entry_point": f"{__name__}.lightswitch_env_cfg:RobotLightSwitchPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": "unitree_rl_lab.tasks.agents.rsl_rl_lightswitch_ppo_cfg:LightSwitchPPORunnerCfg",
+    },
+)
