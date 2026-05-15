@@ -139,7 +139,8 @@ python scripts/rsl_rl/play.py \
   --play_reset_mode success_keep_robot \
   --headless \
   --video \
-  --video_length 800
+  --video_length 800 \
+  --vel_arrows
 ```
 
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.

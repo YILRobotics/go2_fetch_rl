@@ -55,6 +55,12 @@ parser.add_argument(
     help="Prim path to follow when using follow camera mode.",
 )
 parser.add_argument(
+    "--vel_arrows",
+    action="store_true",
+    default=False,
+    help="Show base-velocity command debug arrows during play.",
+)
+parser.add_argument(
     "--use_pretrained_checkpoint",
     action="store_true",
     help="Use the pre-trained checkpoint from Nucleus.",
@@ -218,6 +224,15 @@ def main():
     )
     _apply_play_terrain_overrides(env_cfg)
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+
+    if args_cli.vel_arrows:
+        commands_cfg = getattr(env_cfg, "commands", None)
+        base_velocity_cfg = getattr(commands_cfg, "base_velocity", None) if commands_cfg is not None else None
+        if base_velocity_cfg is not None and hasattr(base_velocity_cfg, "debug_vis"):
+            base_velocity_cfg.debug_vis = True
+            print("[INFO] Enabled velocity command arrows (commands.base_velocity.debug_vis=True).")
+        else:
+            print("[WARN] --vel_arrows ignored: commands.base_velocity.debug_vis is unavailable for this task.")
 
     # configure viewer/camera settings for rendering
     if hasattr(env_cfg, "viewer"):

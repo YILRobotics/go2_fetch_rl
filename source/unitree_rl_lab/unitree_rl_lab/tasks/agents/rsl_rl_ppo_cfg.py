@@ -18,6 +18,12 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 1000 # save checkpoint
     experiment_name = ""
     empirical_normalization = False
+    # Explicitly map model observation sets to env observation groups.
+    # This avoids rsl_rl fallback warnings for missing 'critic' mapping.
+    obs_groups = {
+        "actor": ["policy"],
+        "critic": ["critic"],
+    }
 
     actor = {
         "class_name": "MLPModel",
