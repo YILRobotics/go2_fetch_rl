@@ -8,8 +8,10 @@ sudo apt install nvtop -y
 sudo apt install htop -y
 sudo apt install tree -y
 sudo apt install htop -y
+sudo apt install ncdu # for checking folder and file sizes
 
 sudo apt install ros-humble-librealsense2*
+sudo apt install ros-humble-realsense2-camera
 ```
 
 

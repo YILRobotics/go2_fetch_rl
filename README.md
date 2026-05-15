@@ -1,5 +1,7 @@
 # Go2 Fechrobot RL with IsaacSim/Lab
 
+<video src="data/rl-video-step-0_8.mp4#t=2" controls width="960"></video>
+
 ## Environment Setup 
 
 ### 1. Follow the original README.md instructions (below)
@@ -13,6 +15,8 @@ conda activate isaac_lab_alessandro
 or
 conda activate isaac_lab
 ```
+### ⚠️ DO NOT CONDA INIT
+Do not run `conda init` or uncomment conda initialization in `.bashrc` or add it to your PATH, as it interferes with ROS2.
 
 ## Training
 
@@ -88,6 +92,18 @@ Why it helps:
 - At large `num_envs` this can improve `Steps per second` without changing the PPO/task logic.
 
 
+
+### Unitree-Go2-LightSwitch-4L Task
+
+```bash
+python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --num_envs 16
+```
+
+```bash
+python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --headless --logger wandb --video --video_interval 75 --video_length 300 --log_project_name f_lightswitch_test --run_name test_1
+```
+  
+
 ## Play/Inference
 
 **Use the newest Run:**
@@ -108,10 +124,25 @@ python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity-4L --num_envs 32 --che
 python scripts/rsl_rl/play.py \
   --task Unitree-Go2-PushCube-4L \
   --num_envs 16 \
-  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-04_21-30-01_walk_1/model_5000.pt \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-04-05_21-11-33_test_77/model_2399.pt \
   --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt \
   --play_reset_mode success_keep_robot
 ```
+
+Headless and make video:
+```bash
+python scripts/rsl_rl/play.py \
+  --task Unitree-Go2-PushCube-4L \
+  --num_envs 8 \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-05-15_02-52-05_cam_6/model_2399.pt \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt \
+  --play_reset_mode success_keep_robot \
+  --headless \
+  --video \
+  --video_length 800 \
+  --vel_arrows
+```
+
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
 
 - The push task already wraps the 4-leg velocity policy inside the push action stack in source/unitree_rl_lab/unitree_rl_lab/tasks/push_env_cfg.py:401, so Unitree-Go2-PushCube-4L runs the high-level push policy and the low-level one.

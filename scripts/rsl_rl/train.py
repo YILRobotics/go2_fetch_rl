@@ -203,6 +203,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if args_cli.task == "UnitreeGo2PushCube4L":
             env_cfg.viewer.eye = [-60.0, 0.0, 7.0]
             env_cfg.viewer.lookat = [0.0, 0.0, -14]
+        elif args_cli.task == "Unitree-Go2-LightSwitch-4L":
+            env_cfg.viewer.eye = [-50.0, -25.0, 5.0]
+            env_cfg.viewer.lookat = [0.0, 0.0, -7]
         else:
             env_cfg.viewer.eye = [-55.0, -25.0, 10.0]
             env_cfg.viewer.lookat = [0.0, 0.0, -15]
