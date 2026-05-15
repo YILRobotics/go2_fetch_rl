@@ -1,6 +1,6 @@
 # Go2 Fechrobot RL with IsaacSim/Lab
 
-<video src="data/rl-video-step-0_6.mp4" controls width="960"></video>
+<video src="data/rl-video-step-0_8.mp4#t=2" controls width="960"></video>
 
 ## Environment Setup 
 
