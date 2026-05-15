@@ -860,6 +860,7 @@ def cube_outside_base_frame_polygon_penalty(
     debug_env_id: int = 0,
     debug_all_envs: bool = False,
     debug_height: float = 0.02,
+    debug_opacity: float = 0.35,
 ) -> torch.Tensor:
     """Hard penalty: 1 when cube XY is outside a polygon in robot base frame, else 0."""
     robot: Articulation = env.scene[robot_cfg.name]
@@ -895,6 +896,7 @@ def cube_outside_base_frame_polygon_penalty(
             env_id=debug_env_id,
             all_envs=debug_all_envs,
             height=debug_height,
+            opacity=debug_opacity,
         )
 
     outside = ~inside
@@ -908,6 +910,7 @@ def _update_camera_region_debug_polygon(
     env_id: int = 0,
     all_envs: bool = False,
     height: float = 0.02,
+    opacity: float = 0.35,
 ):
     """Draw/update filled polygon(s) in world frame for one or all environments."""
     if not all_envs and (env_id < 0 or env_id >= env.num_envs):
@@ -924,6 +927,7 @@ def _update_camera_region_debug_polygon(
     env._push_camera_region_debug_last_step = step
 
     env_ids = range(env.num_envs) if all_envs else [env_id]
+    opacity = max(0.0, min(1.0, float(opacity)))
     for env_idx in env_ids:
         debug_path = f"/World/PushCameraRegionDebug/env_{env_idx}/region"
         mesh_prim = stage.GetPrimAtPath(debug_path)
@@ -932,9 +936,11 @@ def _update_camera_region_debug_polygon(
             mesh.CreateFaceVertexCountsAttr([len(polygon_xy_base)])
             mesh.CreateFaceVertexIndicesAttr(list(range(len(polygon_xy_base))))
             mesh.CreateDisplayColorAttr([Gf.Vec3f(0.15, 0.55, 0.95)])
+            mesh.CreateDisplayOpacityAttr([opacity])
             mesh.CreateDoubleSidedAttr(True)
         else:
             mesh = UsdGeom.Mesh(mesh_prim)
+            mesh.GetDisplayOpacityAttr().Set([opacity])
 
         base_pos = robot.data.root_pos_w[env_idx, :3]
         quat = robot.data.root_quat_w[env_idx, :]

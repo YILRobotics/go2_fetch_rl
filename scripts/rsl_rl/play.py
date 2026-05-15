@@ -10,6 +10,7 @@
 import argparse
 import os
 from importlib.metadata import version
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -37,14 +38,14 @@ parser.add_argument(
     "--camera_eye",
     type=float,
     nargs=3,
-    default=[-6.0, 0.0, 5.0],
+    default=[-5.5, 0.0, 6.0],
     help="Camera eye position for fixed/follow modes.",
 )
 parser.add_argument(
     "--camera_lookat",
     type=float,
     nargs=3,
-    default=[1.0, 1.0, 1.0],
+    default=[6.0, 0.0, 1.0],
     help="Camera look-at target for fixed/follow modes.",
 )
 parser.add_argument(
@@ -152,6 +153,59 @@ def _apply_play_terrain_overrides(env_cfg):
     )
 
 
+def _unique_video_path(path: Path) -> Path:
+    """Return a unique file path by appending _N before the extension."""
+    if not path.exists():
+        return path
+
+    base_name = path.stem
+    suffix = path.suffix
+    index = 1
+    while True:
+        candidate = path.with_name(f"{base_name}_{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _rotate_existing_video_file(path: Path):
+    """Rename an existing video file to *_N before writing a new one."""
+    if not path.exists():
+        return
+    dst = _unique_video_path(path)
+    path.rename(dst)
+    print(f"[INFO] Existing video renamed to avoid overwrite: {dst}")
+
+
+def _renumber_videos_by_age(video_folder: str) -> Path | None:
+    """Rename rl-video-step-0*.mp4 so newest gets the highest suffix."""
+    folder = Path(video_folder)
+    if not folder.exists():
+        print(f"[WARN] Video folder does not exist: {folder}")
+        return None
+
+    videos = sorted(
+        folder.glob("rl-video-step-0*.mp4"),
+        key=lambda p: (p.stat().st_mtime, p.name),
+    )
+    if not videos:
+        print(f"[WARN] No videos found in: {folder}")
+        return None
+
+    temp_paths: list[Path] = []
+    for idx, src in enumerate(videos):
+        tmp = folder / f".tmp_rl_video_{idx}.mp4"
+        src.rename(tmp)
+        temp_paths.append(tmp)
+
+    newest_path = None
+    for idx, tmp in enumerate(temp_paths, start=1):
+        dst = folder / f"rl-video-step-0_{idx}.mp4"
+        tmp.rename(dst)
+        newest_path = dst
+    return newest_path
+
+
 def main():
     """Play with RSL-RL agent."""
     # parse configuration
@@ -205,9 +259,13 @@ def main():
         env = multi_agent_to_single_agent(env)
 
     # wrap for video recording
+    video_folder = None
     if args_cli.video:
+        video_folder = os.path.join(log_dir, "videos", "play")
+        _rotate_existing_video_file(Path(video_folder) / "rl-video-step-0.mp4")
+        _rotate_existing_video_file(Path(video_folder) / "rl-video-step-0.meta.json")
         video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "play"),
+            "video_folder": video_folder,
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
@@ -288,9 +346,11 @@ def main():
             time.sleep(sleep_time)
 
     # close the simulator
-    if enable_goal_lines:
-        draw.clear_lines()
     env.close()
+    if args_cli.video and video_folder is not None:
+        newest_video = _renumber_videos_by_age(video_folder)
+        if newest_video is not None:
+            print(f"[INFO] Newest video file: {newest_video.resolve()}")
 
 
 if __name__ == "__main__":

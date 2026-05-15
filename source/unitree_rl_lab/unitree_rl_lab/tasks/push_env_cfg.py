@@ -730,7 +730,8 @@ class RewardsCfg:
             "debug_vis": False,
             "debug_env_id": 0,
             "debug_all_envs": True,
-            "debug_height": 0.02,
+            "debug_height": -0.32, # from base frame
+            "debug_opacity": 0.35,
         },
     )
 
