@@ -6,7 +6,7 @@ import random
 from typing import TYPE_CHECKING
 
 import torch
-from pxr import Gf, Sdf, UsdPhysics, UsdShade
+from pxr import Gf, Sdf, UsdGeom, UsdPhysics, UsdShade
 
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
@@ -14,6 +14,11 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.sim.utils.stage import get_current_stage
 from isaaclab.sensors import ContactSensor
 from unitree_rl_lab.tasks import mdp
+
+try:
+    from isaaclab.utils.math import quat_apply_inverse
+except ImportError:
+    from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -843,6 +848,112 @@ def robot_in_goal_area_penalty(
         else:
             schedule = min(1.0, max(0.0, shifted_steps / float(transition_steps)))
     return is_inside.float() * schedule
+
+
+def cube_outside_base_frame_polygon_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    polygon_xy_base: tuple[tuple[float, float], ...] = ((0.10, -0.20), (0.10, 0.20), (0.75, -0.90), (-0.75, -0.90)),
+    transition_steps: int = 50_000,
+    debug_vis: bool = False,
+    debug_env_id: int = 0,
+    debug_all_envs: bool = False,
+    debug_height: float = 0.02,
+) -> torch.Tensor:
+    """Hard penalty: 1 when cube XY is outside a polygon in robot base frame, else 0."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+
+    rel_cube_w = cube.data.root_pos_w[:, :3] - robot.data.root_pos_w[:, :3]
+    rel_cube_b = quat_apply_inverse(robot.data.root_quat_w, rel_cube_w)
+    point_xy = rel_cube_b[:, :2]
+
+    poly = torch.tensor(polygon_xy_base, device=env.device, dtype=point_xy.dtype)
+    num_vertices = poly.shape[0]
+    if num_vertices < 3:
+        return torch.zeros(env.num_envs, device=env.device, dtype=point_xy.dtype)
+
+    x = point_xy[:, 0]
+    y = point_xy[:, 1]
+
+    inside = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+    j = num_vertices - 1
+    eps = 1e-8
+    for i in range(num_vertices):
+        xi, yi = poly[i, 0], poly[i, 1]
+        xj, yj = poly[j, 0], poly[j, 1]
+        intersects = ((yi > y) != (yj > y)) & (x < (xj - xi) * (y - yi) / (yj - yi + eps) + xi)
+        inside = inside ^ intersects
+        j = i
+
+    if debug_vis:
+        _update_camera_region_debug_polygon(
+            env=env,
+            robot=robot,
+            polygon_xy_base=polygon_xy_base,
+            env_id=debug_env_id,
+            all_envs=debug_all_envs,
+            height=debug_height,
+        )
+
+    outside = ~inside
+    return _curriculum_alpha(env, transition_steps) * outside.float()
+
+
+def _update_camera_region_debug_polygon(
+    env: ManagerBasedRLEnv,
+    robot: Articulation,
+    polygon_xy_base: tuple[tuple[float, float], ...],
+    env_id: int = 0,
+    all_envs: bool = False,
+    height: float = 0.02,
+):
+    """Draw/update filled polygon(s) in world frame for one or all environments."""
+    if not all_envs and (env_id < 0 or env_id >= env.num_envs):
+        return
+
+    stage = get_current_stage()
+    if stage is None:
+        return
+
+    step = int(env.common_step_counter)
+    last_step = getattr(env, "_push_camera_region_debug_last_step", -1)
+    if last_step == step:
+        return
+    env._push_camera_region_debug_last_step = step
+
+    env_ids = range(env.num_envs) if all_envs else [env_id]
+    for env_idx in env_ids:
+        debug_path = f"/World/PushCameraRegionDebug/env_{env_idx}/region"
+        mesh_prim = stage.GetPrimAtPath(debug_path)
+        if not mesh_prim or not mesh_prim.IsValid():
+            mesh = UsdGeom.Mesh.Define(stage, debug_path)
+            mesh.CreateFaceVertexCountsAttr([len(polygon_xy_base)])
+            mesh.CreateFaceVertexIndicesAttr(list(range(len(polygon_xy_base))))
+            mesh.CreateDisplayColorAttr([Gf.Vec3f(0.15, 0.55, 0.95)])
+            mesh.CreateDoubleSidedAttr(True)
+        else:
+            mesh = UsdGeom.Mesh(mesh_prim)
+
+        base_pos = robot.data.root_pos_w[env_idx, :3]
+        quat = robot.data.root_quat_w[env_idx, :]
+        qw, qx, qy, qz = float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])
+        yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+        cy = math.cos(yaw)
+        sy = math.sin(yaw)
+
+        bx = float(base_pos[0].item())
+        by = float(base_pos[1].item())
+        bz = float(base_pos[2].item()) + float(height)
+
+        points = []
+        for px_b, py_b in polygon_xy_base:
+            wx = bx + cy * float(px_b) - sy * float(py_b)
+            wy = by + sy * float(px_b) + cy * float(py_b)
+            points.append(Gf.Vec3f(float(wx), float(wy), float(bz)))
+
+        mesh.GetPointsAttr().Set(points)
 
 
 def robot_stop_after_goal_reward(

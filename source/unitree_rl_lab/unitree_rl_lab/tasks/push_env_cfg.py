@@ -29,6 +29,14 @@ from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
 SIM_DT = 0.005
 GOAL_XY = (0.0, 0.0)
 GOAL_RADIUS_M = 0.2
+# Base frame axes used by this env are +x forward and +y left.
+# Camera annotation used +y right, so we negate y when converting points.
+CUBE_CAMERA_REGION_POLYGON_XY_BASE = (
+    (0.10, -0.20),
+    (0.10, 0.20),
+    (0.75, 0.90),
+    (0.75, -0.90),
+)
 
 HIGH_LEVEL_POLICY_HZ = 15.0
 
@@ -711,6 +719,21 @@ class RewardsCfg:
         },
     )
 
+    cube_outside_camera_region_penalty = RewTerm(
+        func=push_mdp.cube_outside_base_frame_polygon_penalty,
+        weight=-0.8,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "cube_cfg": SceneEntityCfg("cube"),
+            "polygon_xy_base": CUBE_CAMERA_REGION_POLYGON_XY_BASE,
+            "transition_steps": TRANSITION_STEPS,
+            "debug_vis": False,
+            "debug_env_id": 0,
+            "debug_all_envs": True,
+            "debug_height": 0.02,
+        },
+    )
+
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
 
     # Keep some stabilizing penalties from locomotion tasks.
@@ -834,6 +857,7 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
         self.scene.num_envs = 32
         self.observations.policy.enable_corruption = False
         self.observations.critic.enable_corruption = False
+        self.rewards.cube_outside_camera_region_penalty.params["debug_vis"] = True
 
         reset_mode = os.getenv("GO2_PUSH_PLAY_RESET_MODE", "standard").strip().lower()
         if reset_mode == "success_keep_robot":
