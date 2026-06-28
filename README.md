@@ -29,7 +29,7 @@ Do not run `conda init` or uncomment conda initialization in `.bashrc` or add it
 ### Unitree-Go2-Velocity-4L Task
 
 ```bash
-python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --logger wandb --video --video_interval 500 --video_length 300 --log_project_name f_vel_4l --run_name walk_1
+python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --headless --logger wandb --video --video_interval 1000 --video_length 300 --log_project_name f_vel_4l --run_name walk_ff_3
 ```
 
 **For live:** (don't use `--headless` and set low number of envs)
@@ -124,9 +124,10 @@ python scripts/rsl_rl/play.py --task Unitree-Go2-Velocity-4L --num_envs 32 --che
 python scripts/rsl_rl/play.py \
   --task Unitree-Go2-PushCube-4L \
   --num_envs 16 \
-  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-04-05_21-11-33_test_77/model_2399.pt \
-  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt \
-  --play_reset_mode success_keep_robot
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-06-27_22-26-46_ff_2_1/model_2399.pt \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-27_12-18-42_walk_ff_2/exported/policy.pt \
+  --play_reset_mode success_keep_robot \
+  -- vel_arrows
 ```
 
 Headless and make video:

@@ -32,10 +32,10 @@ GOAL_RADIUS_M = 0.2
 # Base frame axes used by this env are +x forward and +y left.
 # Camera annotation used +y right, so we negate y when converting points.
 CUBE_CAMERA_REGION_POLYGON_XY_BASE = (
-    (0.10, -0.20),
-    (0.10, 0.20),
-    (0.75, 0.90),
-    (0.75, -0.90),
+    (0.05, -0.20),
+    (0.05, 0.20),
+    (0.75, 0.75),
+    (0.75, -0.75),
 )
 
 HIGH_LEVEL_POLICY_HZ = 15.0
@@ -60,16 +60,16 @@ SUCCESS_HOLD_TIME_S = 0.6
 SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN = 0.05
 SUCCESS_ROBOT_SPEED_THRESHOLD = 0.15
 
-CUBE_POS_OBS_NOISE_STD = 0.015 # m
-CUBE_VEL_OBS_NOISE_STD = 0.08 # m/s
-CUBE_POS_OBS_DROPOUT_PROB = 0.05 
-CUBE_VEL_OBS_DROPOUT_PROB = 0.08
-CUBE_POS_OBS_DELAY_STEPS = 1
-CUBE_VEL_OBS_DELAY_STEPS = 1
-CUBE_POS_OBS_SPIKE_PROB = 0.01
-CUBE_VEL_OBS_SPIKE_PROB = 0.01
-CUBE_POS_OBS_SPIKE_STD = 0.05
-CUBE_VEL_OBS_SPIKE_STD = 0.15
+CUBE_POS_OBS_NOISE_STD = 0.025 # m
+CUBE_VEL_OBS_NOISE_STD = 0.45 # m/s
+CUBE_POS_OBS_DROPOUT_PROB = 0.07 
+CUBE_VEL_OBS_DROPOUT_PROB = 0.07
+CUBE_POS_OBS_DELAY_STEPS = 1 # 65ms
+CUBE_VEL_OBS_DELAY_STEPS = 1 # 65ms
+CUBE_POS_OBS_SPIKE_PROB = 0.03
+CUBE_VEL_OBS_SPIKE_PROB = 0.03
+CUBE_POS_OBS_SPIKE_STD = 0.1
+CUBE_VEL_OBS_SPIKE_STD = 1.0
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
     return max(1, int(round(1.0 / (sim_dt * policy_hz))))
@@ -199,12 +199,22 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
 class LowLevelObsCfg(ObsGroup):
     """Low-level observation terms expected by the pretrained 4L locomotion policy."""
 
-    base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2)
-    projected_gravity = ObsTerm(func=mdp.projected_gravity)
-    velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
-    joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-    joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05)
-    actions = ObsTerm(func=mdp.last_action)
+    base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, clip=(-100, 100))
+    projected_gravity = ObsTerm(func=mdp.projected_gravity, clip=(-100, 100))
+    velocity_commands = ObsTerm(
+        func=mdp.generated_commands,
+        clip=(-100, 100),
+        params={"command_name": "base_velocity"},
+    )
+    joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, clip=(-100, 100))
+    joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
+    foot_force = ObsTerm(
+        func=mdp.foot_force,
+        scale=0.01,
+        clip=(0, 150),
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+    )
+    actions = ObsTerm(func=mdp.last_action, clip=(-100, 100))
 
     def __post_init__(self):
         self.enable_corruption = False
@@ -288,9 +298,10 @@ class EventCfg:
         mode="startup", # startup: called once at the beginning of training. reset: called at every env reset.
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.3, 1.2),
-            "dynamic_friction_range": (0.3, 1.2),
+            "static_friction_range": (0.7, 1.8),
+            "dynamic_friction_range": (0.7, 1.5),
             "restitution_range": (0.0, 0.15),
+            "make_consistent": True,
             "num_buckets": 64,
         },
     )
@@ -310,8 +321,8 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "static_friction_range": (0.75, 0.95),
-            "dynamic_friction_range": (0.75, 0.95),
+            "static_friction_range": (0.25, 0.75),
+            "dynamic_friction_range": (0.2, 0.6),
             "restitution_range": (0.0, 0.1),
             "make_consistent": True,
             "num_buckets": 32,
@@ -333,7 +344,7 @@ class EventCfg:
         mode="prestartup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "scale_range": (0.6, 1.8),
+            "scale_range": (1.0, 2.0),
         },
     )
 
@@ -352,8 +363,8 @@ class EventCfg:
         func=push_mdp.randomize_floor_friction_per_reset,
         mode="reset",
         params={
-            "static_friction_range": (0.65, 0.95),
-            "dynamic_friction_range": (0.55, 0.85),
+            "static_friction_range": (0.75, 0.95),
+            "dynamic_friction_range": (0.6, 0.8),
             "restitution_range": (0.02, 0.08),
             "terrain_material_prim_path": "/World/ground/terrain/physicsMaterial",
         },
@@ -465,12 +476,35 @@ class ObservationsCfg:
         )
         goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
         goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
-        cube_to_goal_xy = ObsTerm(func=push_mdp.cube_to_goal_vector_xy, params={"goal_xy": GOAL_XY})
+        cube_to_goal_xy = ObsTerm(
+            func=push_mdp.cube_to_goal_vector_xy,
+            params={
+                "goal_xy": GOAL_XY,
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
         lf_foot_to_cube_xy = ObsTerm(
             func=push_mdp.left_front_foot_to_cube_vector_xy,
             params={
                 "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
                 "cube_cfg": SceneEntityCfg("cube"),
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
+        foot_force = ObsTerm(
+            func=mdp.foot_force,
+            scale=0.01,
+            clip=(0, 150),
+            params={
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
             },
         )
 
@@ -514,12 +548,35 @@ class ObservationsCfg:
         )
         goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
         goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
-        cube_to_goal_xy = ObsTerm(func=push_mdp.cube_to_goal_vector_xy, params={"goal_xy": GOAL_XY})
+        cube_to_goal_xy = ObsTerm(
+            func=push_mdp.cube_to_goal_vector_xy,
+            params={
+                "goal_xy": GOAL_XY,
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
         lf_foot_to_cube_xy = ObsTerm(
             func=push_mdp.left_front_foot_to_cube_vector_xy,
             params={
                 "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
                 "cube_cfg": SceneEntityCfg("cube"),
+                "noise_std": CUBE_POS_OBS_NOISE_STD,
+                "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
+                "delay_steps": CUBE_POS_OBS_DELAY_STEPS,
+                "spike_prob": CUBE_POS_OBS_SPIKE_PROB,
+                "spike_std": CUBE_POS_OBS_SPIKE_STD,
+            },
+        )
+        foot_force = ObsTerm(
+            func=mdp.foot_force,
+            scale=0.01,
+            clip=(0, 150),
+            params={
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
             },
         )
 
@@ -696,15 +753,15 @@ class RewardsCfg:
         },
     )
 
-    # backward_body_velocity_penalty = RewTerm(
-    #     func=push_mdp.backward_body_velocity_penalty,
-    #     weight=-0.001,
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot"),
-    #         "deadzone": 0.04,
-    #         "transition_steps": TRANSITION_STEPS,
-    #     },
-    # )
+    backward_body_velocity_penalty = RewTerm(
+        func=push_mdp.backward_body_velocity_penalty,
+        weight=-0.01,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "deadzone": 0.03,
+            "transition_steps": TRANSITION_STEPS,
+        },
+    )
 
     robot_in_goal_area = RewTerm(
         func=push_mdp.robot_in_goal_area_penalty,
@@ -859,6 +916,17 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
         self.observations.policy.enable_corruption = False
         self.observations.critic.enable_corruption = False
         self.rewards.cube_outside_camera_region_penalty.params["debug_vis"] = True
+        self.events.cube_size_variation.params["scale_range"] = (1.5, 1.5)
+        # Rubber feet and a plastic cube on a plastic/vinyl lab floor.
+        # Material coefficients are multiplied by the terrain coefficients.
+        self.events.robot_physics_material.params["static_friction_range"] = (1.0, 1.0)
+        self.events.robot_physics_material.params["dynamic_friction_range"] = (0.9, 0.9)
+        self.events.cube_physics_material.params["static_friction_range"] = (0.45, 0.45)
+        self.events.cube_physics_material.params["dynamic_friction_range"] = (0.35, 0.35)
+        self.events.floor_friction_per_reset.params["static_friction_range"] = (0.80, 0.80)
+        self.events.floor_friction_per_reset.params["dynamic_friction_range"] = (0.65, 0.65)
+        self.commands.base_velocity.debug_vis = True
+        self.actions.pre_trained_policy_action.debug_vis = True
 
         reset_mode = os.getenv("GO2_PUSH_PLAY_RESET_MODE", "standard").strip().lower()
         if reset_mode == "success_keep_robot":

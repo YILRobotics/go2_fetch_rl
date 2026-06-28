@@ -12,7 +12,6 @@ import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sim.utils.stage import get_current_stage
-from isaaclab.sensors import ContactSensor
 from unitree_rl_lab.tasks import mdp
 
 try:
@@ -534,19 +533,45 @@ def cube_to_goal_vector_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     goal_xy: tuple[float, float] = (0.0, 0.0),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
 ) -> torch.Tensor:
-    return goal_position_xy(env, goal_xy=goal_xy) - cube_position_xy(env, cube_cfg=cube_cfg)
+    cube_xy = cube_position_xy(
+        env,
+        cube_cfg=cube_cfg,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        delay_steps=delay_steps,
+        spike_prob=spike_prob,
+        spike_std=spike_std,
+    )
+    return goal_position_xy(env, goal_xy=goal_xy) - cube_xy
 
 
 def left_front_foot_to_cube_vector_xy(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
 ) -> torch.Tensor:
     robot: Articulation = env.scene[foot_cfg.name]
-    cube: RigidObject = env.scene[cube_cfg.name]
-    foot_xy = robot.data.body_pos_w[:, foot_cfg.body_ids, :2].mean(dim=1)
-    cube_xy = cube.data.root_pos_w[:, :2]
+    foot_xy = robot.data.body_pos_w[:, foot_cfg.body_ids, :2].mean(dim=1) - _scene_env_origins_xy(env)
+    cube_xy = cube_position_xy(
+        env,
+        cube_cfg=cube_cfg,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        delay_steps=delay_steps,
+        spike_prob=spike_prob,
+        spike_std=spike_std,
+    )
     return cube_xy - foot_xy
 
 

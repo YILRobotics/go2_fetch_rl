@@ -133,9 +133,10 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.3, 1.2),
-            "dynamic_friction_range": (0.3, 1.2),
+            "static_friction_range": (0.7, 1.8),
+            "dynamic_friction_range": (0.7, 1.5),
             "restitution_range": (0.0, 0.15),
+            "make_consistent": True,
             "num_buckets": 64,
         },
     )
@@ -201,11 +202,11 @@ class CommandsCfg:
 
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.1,
+        resampling_time_range=(8.0, 10.0),
+        rel_standing_envs=0.2,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
+            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.5, 1.5)
         ), # command sampling range used during normal training command generation
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
@@ -262,6 +263,12 @@ class ObservationsCfg:
             clip=(-100, 100),
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )
+        foot_force = ObsTerm(
+            func=mdp.foot_force,
+            scale=0.01,
+            clip=(0, 150),
+            params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+        )
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
 
         def __post_init__(self):
@@ -286,6 +293,12 @@ class ObservationsCfg:
         )
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, clip=(-100, 100))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
+        foot_force = ObsTerm(
+            func=mdp.foot_force,
+            scale=0.01,
+            clip=(0, 150),
+            params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+        )
         joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01, clip=(-100, 100))
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
         # height_scanner = ObsTerm(func=mdp.height_scan,
@@ -430,7 +443,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 4
         self.episode_length_s = 20.0
         # simulation settings
-        self.sim.dt = 0.005
+        self.sim.dt = 0.005 # 50hz
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
@@ -464,5 +477,21 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         self.scene.terrain.terrain_generator.num_cols = COBBLESTONE_ROAD_CFG.num_cols
         self.scene.terrain.max_init_terrain_level = COBBLESTONE_ROAD_CFG.num_rows - 1
         self.scene.terrain.terrain_generator.curriculum = False
+
+        # Just plane wihtou any terrain generator
+        # self.scene.terrain.terrain_type = "plane"
+        # self.scene.terrain.terrain_generator = None
+        # self.scene.terrain.max_init_terrain_level = None
+        # self.curriculum.terrain_levels = None
+
         
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+        self.curriculum.lin_vel_cmd_levels = None      
+
+        # Set cmd vel manually for play
+        # self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
+        #     lin_vel_x=(0.0, 0.0),
+        #     lin_vel_y=(0.0, 0.0),
+        #     ang_vel_z=(0.0, 0.0),
+        # )
+        # self.commands.base_velocity.rel_standing_envs = 0.0

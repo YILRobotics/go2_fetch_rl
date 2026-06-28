@@ -291,6 +291,12 @@ def main():
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    env.unwrapped.print_foot_force = True
+    env.unwrapped.record_foot_force = True
+    env.unwrapped.foot_force_record_path = os.path.join(
+        log_dir, f"foot_force_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+    )
+    print(f"[INFO]: Recording foot forces to: {env.unwrapped.foot_force_record_path}")
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
