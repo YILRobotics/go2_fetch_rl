@@ -9,7 +9,6 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
-from isaaclab.utils.math import quat_apply
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -101,18 +100,39 @@ def foot_force(
     asset: Articulation = env.unwrapped.scene[asset_cfg.name]
     sensor_body_ids = sensor_cfg.body_ids
     if isinstance(sensor_body_ids, slice):
-        foot_body_names = contact_sensor.body_names[sensor_body_ids]
+        sensor_body_key = (sensor_body_ids.start, sensor_body_ids.stop, sensor_body_ids.step)
     elif isinstance(sensor_body_ids, int):
-        foot_body_names = [contact_sensor.body_names[sensor_body_ids]]
+        sensor_body_key = (sensor_body_ids,)
     else:
-        foot_body_names = [contact_sensor.body_names[index] for index in sensor_body_ids]
-    foot_body_ids, _ = asset.find_bodies(foot_body_names, preserve_order=True)
-    foot_quat_w = asset.data.body_quat_w[:, foot_body_ids, :]
+        sensor_body_key = tuple(sensor_body_ids)
 
-    foot_normal_b = torch.zeros_like(foot_forces_w)
-    foot_normal_b[..., 2] = 1.0
-    foot_normal_w = quat_apply(foot_quat_w, foot_normal_b)
-    raw = torch.sum(foot_forces_w * foot_normal_w, dim=2).clamp_min(0.0)
+    cache_key = (asset_cfg.name, sensor_cfg.name, sensor_body_key)
+    body_id_cache = getattr(env, "_foot_force_body_id_cache", None)
+    if body_id_cache is None:
+        body_id_cache = {}
+        env._foot_force_body_id_cache = body_id_cache
+
+    foot_body_ids = body_id_cache.get(cache_key)
+    if foot_body_ids is None:
+        if isinstance(sensor_body_ids, slice):
+            foot_body_names = contact_sensor.body_names[sensor_body_ids]
+        elif isinstance(sensor_body_ids, int):
+            foot_body_names = [contact_sensor.body_names[sensor_body_ids]]
+        else:
+            foot_body_names = [contact_sensor.body_names[index] for index in sensor_body_ids]
+        resolved_body_ids, _ = asset.find_bodies(foot_body_names, preserve_order=True)
+        foot_body_ids = torch.as_tensor(resolved_body_ids, dtype=torch.long, device=foot_forces_w.device)
+        body_id_cache[cache_key] = foot_body_ids
+
+    foot_quat_w = asset.data.body_quat_w.index_select(1, foot_body_ids)
+
+    # Third column of the quaternion rotation matrix: local +Z in world frame.
+    qw, qx, qy, qz = foot_quat_w.unbind(dim=-1)
+    force_x, force_y, force_z = foot_forces_w.unbind(dim=-1)
+    normal_x = 2.0 * (qx * qz + qw * qy)
+    normal_y = 2.0 * (qy * qz - qw * qx)
+    normal_z = 1.0 - 2.0 * (qx.square() + qy.square())
+    raw = (force_x * normal_x + force_y * normal_y + force_z * normal_z).clamp_min(0.0)
     # Contact forces can briefly become non-finite during unstable PhysX contacts.
     # Keep invalid sensor samples out of the policy observation.
     raw = torch.nan_to_num(raw, nan=0.0, posinf=200.0, neginf=0.0)
