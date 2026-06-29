@@ -209,7 +209,7 @@ class CommandsCfg:
             lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.5, 1.5)
         ), # command sampling range used during normal training command generation
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
+            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.5, 1.5)
         ), # wider allowable envelope for the same command dimensions. For wider allowable envelope for the same command dimensions.
     )
 

@@ -14,7 +14,7 @@ from isaacsim.core.simulation_manager.impl.isaac_events import IsaacEvents
 from isaacsim.core.utils.viewports import set_active_viewport_camera, set_camera_view
 from isaacsim.examples.interactive.base_sample.base_sample_experimental import BaseSample
 from isaacsim.storage.native import get_assets_root_path
-from pxr import Gf, UsdGeom, UsdPhysics, UsdShade
+from pxr import Gf, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from .policy import Go2VelocityPolicy
 
@@ -23,9 +23,9 @@ class Go2WalkingExample(BaseSample):
     """Spawn the training-model Go2 and drive its velocity command by keyboard."""
 
     CAMERA_PATH = "/World/Go2FollowCamera"
-    CAMERA_OFFSET = (-4.0, -4.0, 2.5)
-    CAMERA_TARGET_HEIGHT = 0.2
-    CAMERA_FOLLOW_ALPHA = (0.12, 0.12, 0.03)
+    CAMERA_OFFSET = (-3.0, -4.0, 2.5)
+    CAMERA_TARGET_HEIGHT = 0.1
+    CAMERA_FOLLOW_ALPHA = (0.05, 0.05, 0.03)
 
     def __init__(self) -> None:
         super().__init__()
@@ -91,12 +91,84 @@ class Go2WalkingExample(BaseSample):
         stage = omni.usd.get_context().get_stage()
         material = UsdShade.Material.Define(stage, "/World/ground/Looks/Go2PhysicsMaterial")
         physics_material = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
-        physics_material.CreateStaticFrictionAttr().Set(1.0)
-        physics_material.CreateDynamicFrictionAttr().Set(1.0)
+        physics_material.CreateStaticFrictionAttr().Set(1.8)
+        physics_material.CreateDynamicFrictionAttr().Set(1.8)
         physics_material.CreateRestitutionAttr().Set(0.0)
         ground = stage.GetPrimAtPath("/World/ground/GroundPlane/CollisionPlane")
         if ground.IsValid():
             UsdShade.MaterialBindingAPI.Apply(ground).Bind(material)
+
+    @staticmethod
+    def _add_softbox_light() -> None:
+        """Add a large area light aimed at the robot from 30 degrees off vertical."""
+        stage = omni.usd.get_context().get_stage()
+        light = UsdLux.RectLight.Define(stage, "/World/Go2Softbox")
+        light.CreateWidthAttr(8.0)
+        light.CreateHeightAttr(8.0)
+        light.CreateIntensityAttr(5000.0)
+        light.CreateExposureAttr(2.0)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.9))
+        light.CreateNormalizeAttr(True)
+
+        position = Gf.Vec3d(-4.0, -4.0, 6.0)
+        target = Gf.Vec3d(2.0, 0.0, 0.5)
+        orientation = Gf.Matrix4d().SetLookAt(position, target, Gf.Vec3d(0.0, 0.0, 1.0))
+        orientation = orientation.GetInverse().ExtractRotation().GetQuat()
+        xform = UsdGeom.Xformable(light.GetPrim())
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(position)
+        xform.AddOrientOp().Set(Gf.Quatf(orientation))
+
+    @staticmethod
+    def _add_obstacles() -> None:
+        """Add a shallow ramp and three loose cubes in front of the robot."""
+        stage = omni.usd.get_context().get_stage()
+        UsdGeom.Xform.Define(stage, "/World/Go2Obstacles")
+
+        ramp_material = UsdShade.Material.Define(stage, "/World/Go2Obstacles/RampPhysicsMaterial")
+        ramp_physics_material = UsdPhysics.MaterialAPI.Apply(ramp_material.GetPrim())
+        ramp_physics_material.CreateStaticFrictionAttr().Set(2.5)
+        ramp_physics_material.CreateDynamicFrictionAttr().Set(2.5)
+        ramp_physics_material.CreateRestitutionAttr().Set(0.0)
+
+        ramp_specs = (
+            ("RampUp", 2.0, -10.0),
+            ("RampDown", 3.48, 10.0),
+        )
+        for name, x, angle in ramp_specs:
+            ramp = UsdGeom.Cube.Define(stage, f"/World/Go2Obstacles/{name}")
+            ramp.CreateSizeAttr(1.0)
+            ramp.CreateDisplayColorAttr([Gf.Vec3f(0.28, 0.32, 0.38)])
+            ramp_xform = UsdGeom.Xformable(ramp.GetPrim())
+            ramp_xform.AddTranslateOp().Set(Gf.Vec3d(x, 0.0, 0.155))
+            ramp_xform.AddRotateXYZOp().Set(Gf.Vec3f(0.0, angle, 0.0))
+            ramp_xform.AddScaleOp().Set(Gf.Vec3f(1.5, 1.2, 0.05))
+            UsdPhysics.CollisionAPI.Apply(ramp.GetPrim())
+            UsdShade.MaterialBindingAPI.Apply(ramp.GetPrim()).Bind(
+                ramp_material,
+                bindingStrength=UsdShade.Tokens.weakerThanDescendants,
+                materialPurpose="physics",
+            )
+
+        block_specs = (
+            ("Block15cm", 0.15, (0.0, -1.0)),
+            ("Block20cm", 0.20, (0.8, -1.0)),
+            ("Block30cm", 0.30, (1.6, -1.0)),
+        )
+        colors = (
+            Gf.Vec3f(0.75, 0.32, 0.20),
+            Gf.Vec3f(0.82, 0.55, 0.18),
+            Gf.Vec3f(0.62, 0.22, 0.18),
+        )
+        for (name, size, (x, y)), color in zip(block_specs, colors):
+            cube = UsdGeom.Cube.Define(stage, f"/World/Go2Obstacles/{name}")
+            cube.CreateSizeAttr(size)
+            cube.CreateDisplayColorAttr([color])
+            cube_xform = UsdGeom.Xformable(cube.GetPrim())
+            cube_xform.AddTranslateOp().Set(Gf.Vec3d(x, y, size * 0.5 + 0.01))
+            UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+            UsdPhysics.RigidBodyAPI.Apply(cube.GetPrim())
+            UsdPhysics.MassAPI.Apply(cube.GetPrim()).CreateDensityAttr(100.0)
 
     def setup_scene(self) -> None:
         self._snapshot_simulation_state()
@@ -110,11 +182,13 @@ class Go2WalkingExample(BaseSample):
             path="/World/ground",
         )
         self._apply_ground_material()
+        self._add_softbox_light()
+        self._add_obstacles()
         self.go2 = Go2VelocityPolicy(prim_path="/World/Go2", position=(0.0, 0.0, 0.5))
         UsdGeom.Camera.Define(omni.usd.get_context().get_stage(), self.CAMERA_PATH)
         set_camera_view(
-            eye=(-4.0, -4.0, 3.0),
-            target=(0.0, 0.0, 0.3),
+            eye=(-4.0, -4.0, 2.5),
+            target=(0.0, 0.0, 0.2),
             camera_prim_path=self.CAMERA_PATH,
         )
         set_active_viewport_camera(self.CAMERA_PATH)

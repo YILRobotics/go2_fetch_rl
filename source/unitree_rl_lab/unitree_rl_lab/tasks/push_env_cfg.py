@@ -45,10 +45,10 @@ CMD_CURRICULUM_STEP_SIZE = 500  # Number of steps before each increment ((env.co
 CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
-CMD_INIT_ANG_VEL_ABS = 0.02
-CMD_LIMIT_LIN_VEL_X_ABS = 0.5 # Final limit
-CMD_LIMIT_LIN_VEL_Y_ABS = 0.5
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.25
+CMD_INIT_ANG_VEL_ABS = 0.025
+CMD_LIMIT_LIN_VEL_X_ABS = 0.4 # Final limit
+CMD_LIMIT_LIN_VEL_Y_ABS = 0.4
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.3
 
 SCALE_BACK_VEL = 1.0 # used to reduce use of backward vel but working as good. 
 SCALE_SIDE_VEL = 1.0 # used to reduce use of side vel but working as good
@@ -60,16 +60,16 @@ SUCCESS_HOLD_TIME_S = 0.6
 SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN = 0.05
 SUCCESS_ROBOT_SPEED_THRESHOLD = 0.15
 
-CUBE_POS_OBS_NOISE_STD = 0.025 # m
-CUBE_VEL_OBS_NOISE_STD = 0.45 # m/s
+CUBE_POS_OBS_NOISE_STD = 0.035 # m
+CUBE_VEL_OBS_NOISE_STD = 0.5 # m/s
 CUBE_POS_OBS_DROPOUT_PROB = 0.07 
 CUBE_VEL_OBS_DROPOUT_PROB = 0.07
 CUBE_POS_OBS_DELAY_STEPS = 1 # 65ms
 CUBE_VEL_OBS_DELAY_STEPS = 1 # 65ms
-CUBE_POS_OBS_SPIKE_PROB = 0.03
-CUBE_VEL_OBS_SPIKE_PROB = 0.03
-CUBE_POS_OBS_SPIKE_STD = 0.1
-CUBE_VEL_OBS_SPIKE_STD = 1.0
+CUBE_POS_OBS_SPIKE_PROB = 0.1
+CUBE_VEL_OBS_SPIKE_PROB = 0.1
+CUBE_POS_OBS_SPIKE_STD = 0.15
+CUBE_VEL_OBS_SPIKE_STD = 1.5
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
     return max(1, int(round(1.0 / (sim_dt * policy_hz))))
@@ -755,10 +755,10 @@ class RewardsCfg:
 
     backward_body_velocity_penalty = RewTerm(
         func=push_mdp.backward_body_velocity_penalty,
-        weight=-0.01,
+        weight=-0.035,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
-            "deadzone": 0.03,
+            "deadzone": 0.05,
             "transition_steps": TRANSITION_STEPS,
         },
     )
