@@ -19,7 +19,6 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
-import isaaclab_tasks.manager_based.navigation.mdp as nav_mdp
 from unitree_rl_lab.assets.unitree import UNITREE_GO2_CFG as ROBOT_CFG
 from unitree_rl_lab.tasks import mdp
 
@@ -46,9 +45,9 @@ CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
 CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.025
-CMD_LIMIT_LIN_VEL_X_ABS = 0.4 # Final limit
-CMD_LIMIT_LIN_VEL_Y_ABS = 0.4
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.3
+CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
+CMD_LIMIT_LIN_VEL_Y_ABS = 0.5
+CMD_LIMIT_ANG_VEL_Z_ABS = 0.8
 
 SCALE_BACK_VEL = 1.0 # used to reduce use of backward vel but working as good. 
 SCALE_SIDE_VEL = 1.0 # used to reduce use of side vel but working as good
@@ -298,9 +297,9 @@ class EventCfg:
         mode="startup", # startup: called once at the beginning of training. reset: called at every env reset.
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.7, 1.8),
-            "dynamic_friction_range": (0.7, 1.5),
-            "restitution_range": (0.0, 0.15),
+            "static_friction_range": (0.65, 1.8),
+            "dynamic_friction_range": (0.55, 1.4),
+            "restitution_range": (0.0, 0.1),
             "make_consistent": True,
             "num_buckets": 64,
         },
@@ -313,6 +312,18 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
             "mass_distribution_params": (-1.0, 3.0),
             "operation": "add",
+        },
+    )
+
+    randomize_motor_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "stiffness_distribution_params": (0.93, 1.07),
+            "damping_distribution_params": (0.9, 1.1),
+            "operation": "scale",
+            "distribution": "uniform",
         },
     )
 
@@ -430,7 +441,7 @@ class CommandsCfg:
 class ActionsCfg:
     """High-level action term that outputs cmd_vel and runs the pretrained low-level policy."""
 
-    pre_trained_policy_action: nav_mdp.PreTrainedPolicyActionCfg = nav_mdp.PreTrainedPolicyActionCfg(
+    pre_trained_policy_action: mdp.ResettablePreTrainedPolicyActionCfg = mdp.ResettablePreTrainedPolicyActionCfg(
         asset_name="robot",
         policy_path=LOW_LEVEL_POLICY_PATH,
         low_level_decimation=LOW_LEVEL_DECIMATION,

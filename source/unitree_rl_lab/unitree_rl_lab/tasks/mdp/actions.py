@@ -9,6 +9,10 @@ from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab.managers import ActionTerm
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import DelayBuffer
+from isaaclab_tasks.manager_based.navigation.mdp.pre_trained_policy_action import (
+    PreTrainedPolicyAction,
+    PreTrainedPolicyActionCfg,
+)
 
 
 class DelayedJointPositionAction(JointPositionAction):
@@ -54,3 +58,23 @@ class DelayedJointPositionActionCfg(JointPositionActionCfg):
     class_type: type[ActionTerm] = DelayedJointPositionAction
     min_delay: int = 0
     max_delay: int = 2
+
+
+class ResettablePreTrainedPolicyAction(PreTrainedPolicyAction):
+    """Pre-trained policy action that resets its nested low-level action term."""
+
+    cfg: ResettablePreTrainedPolicyActionCfg
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self.low_level_actions[env_ids] = 0.0
+        self._low_level_action_term.reset(env_ids)
+
+
+@configclass
+class ResettablePreTrainedPolicyActionCfg(PreTrainedPolicyActionCfg):
+    """Configuration for a reset-aware hierarchical policy action."""
+
+    class_type: type[ActionTerm] = ResettablePreTrainedPolicyAction

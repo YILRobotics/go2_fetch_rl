@@ -147,11 +147,19 @@ python scripts/rsl_rl/play.py \
 Just Headless for export
 ```bash
 python scripts/rsl_rl/play.py \
+  --task Unitree-Go2-Velocity-4L \
+  --num_envs 1 \
+  --headless \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/model_6999.pt
+```
+
+```bash
+python scripts/rsl_rl/play.py \
   --task Unitree-Go2-PushCube-4L \
   --num_envs 1 \
-  --checkpoint  /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-06-29_10-38-21_ff_3_2/model_2499.pt  \
-  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-28_12-12-07_walk_ff_3/exported/policy.pt  \
-  --headless
+  --headless \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/exported/policy.pt \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-06-30_13-49-47_ff_5_1/model_2499.pt
 ```
 
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
