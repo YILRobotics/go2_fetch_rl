@@ -135,12 +135,13 @@ def foot_force(
     raw = (force_x * normal_x + force_y * normal_y + force_z * normal_z).clamp_min(0.0)
     # Contact forces can briefly become non-finite during unstable PhysX contacts.
     # Keep invalid sensor samples out of the policy observation.
+    # raw += torch.tensor([3.0, 0.0, 4.0, 4.0], device=raw.device) # Just to simulate real measurements.
     raw = torch.nan_to_num(raw, nan=0.0, posinf=200.0, neginf=0.0)
 
     step = env.common_step_counter
     should_print = (
         getattr(env, "print_foot_force", False)
-        and step % 1 == 0 # %1 is at simulation frequency = 50hz
+        and step % 20 == 0 # %1 is at simulation frequency = 50hz
         and getattr(env, "last_foot_force_print_step", None) != step
     )
     should_record = (

@@ -144,6 +144,16 @@ python scripts/rsl_rl/play.py \
   --vel_arrows
 ```
 
+Just Headless for export
+```bash
+python scripts/rsl_rl/play.py \
+  --task Unitree-Go2-PushCube-4L \
+  --num_envs 1 \
+  --checkpoint  /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-06-29_10-38-21_ff_3_2/model_2499.pt  \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-28_12-12-07_walk_ff_3/exported/policy.pt  \
+  --headless
+```
+
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
 
 - The push task already wraps the 4-leg velocity policy inside the push action stack in source/unitree_rl_lab/unitree_rl_lab/tasks/push_env_cfg.py:401, so Unitree-Go2-PushCube-4L runs the high-level push policy and the low-level one.
