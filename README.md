@@ -41,7 +41,7 @@ python scripts/rsl_rl/train.py --task Unitree-Go2-Velocity-4L --num_envs 32
 ### Unitree-Go2-PushCube-4L Task
 
 ```bash
-python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt --headless --logger wandb --video --video_interval 100 --video_length 300 --log_project_name f_pushcube_4l --run_name test_76
+python scripts/rsl_rl/train.py --task Unitree-Go2-PushCube-4L --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/exported/policy.pt --headless --logger wandb --video --video_interval 500 --video_length 400 --log_project_name f_pushcube_4l --run_name ff_5_2
 ```
 
 - #### -> policies are saved in `unitree_rl_lab/logs/rsl_rl`
@@ -135,8 +135,8 @@ Headless and make video:
 python scripts/rsl_rl/play.py \
   --task Unitree-Go2-PushCube-4L \
   --num_envs 8 \
-  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-05-15_02-52-05_cam_6/model_2399.pt \
-  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-04-05_12-01-56_walk_2/exported/policy.pt \
+  --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-07-02_22-18-29_ff_5_2/model_2499.pt \
+  --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/model_6999.pt \
   --play_reset_mode success_keep_robot \
   --headless \
   --video \

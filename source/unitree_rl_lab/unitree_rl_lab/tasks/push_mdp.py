@@ -327,49 +327,6 @@ def _symmetric_curriculum_range(limit_range: tuple[float, float], initial_abs: f
     return [-current_abs, current_abs]
 
 
-def command_velocity_envelope_stepwise_curriculum(
-    env,
-    env_ids,
-    step_size: int = 5000,
-    lin_vel_increment: float = 0.05,
-    ang_vel_increment: float = 0.02,
-    initial_lin_vel_abs: float = 0.05,
-    initial_ang_vel_abs: float = 0.02,
-    limit_lin_vel_x: float = 0.6,
-    limit_lin_vel_y: float = 0.5,
-    limit_ang_vel_z: float = 0.3,
-    scale_back_vel: float = 1.0,
-    scale_side_vel: float = 1.0,
-):
-    """Increase command velocity limits in steps after every step_size steps.
-
-    Supports asymmetric envelopes:
-    - backward speed can be scaled via ``scale_back_vel`` for x-command
-    - lateral speed can be scaled via ``scale_side_vel`` for y-command
-    """
-    del env_ids
-    command_term = env.command_manager.get_term("base_velocity")
-    ranges = command_term.cfg.ranges
-    limit_ranges = command_term.cfg.limit_ranges
-
-    # Number of increments so far
-    n_increments = int(env.common_step_counter // step_size)
-    # Compute new abs limits
-    lin_vel_x_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_x)
-    lin_vel_y_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_y)
-    ang_vel_abs = min(initial_ang_vel_abs + n_increments * ang_vel_increment, limit_ang_vel_z)
-    back_scale = max(0.0, float(scale_back_vel))
-    side_scale = max(0.0, float(scale_side_vel))
-
-    # Set ranges (supports asymmetric backward / lateral scaling).
-    ranges.lin_vel_x = [-lin_vel_x_abs * back_scale, lin_vel_x_abs]
-    ranges.lin_vel_y = [-lin_vel_y_abs * side_scale, lin_vel_y_abs * side_scale]
-    ranges.ang_vel_z = [-ang_vel_abs, ang_vel_abs]
-
-    # For logging: return the current increment
-    return lin_vel_x_abs
-
-
 def curriculum_common_step_counter(env, env_ids):
     """Expose per-environment step progress for logger backends (TensorBoard/W&B)."""
     del env_ids
@@ -461,7 +418,7 @@ def cube_position_xy(
     cube: RigidObject = env.scene[cube_cfg.name]
     cube_xy = cube.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
     reset_mask = env.episode_length_buf == 0
-    return _corrupt_xy_observation(
+    observation = _corrupt_xy_observation(
         env=env,
         obs_xy=cube_xy,
         state_prefix="_push_cube_pos_obs",
@@ -472,8 +429,10 @@ def cube_position_xy(
         spike_prob=spike_prob,
         spike_std=spike_std,
     )
+    env._last_cube_position_xy_observation = observation.detach()
+    return observation
 
-# Cube's linear velocity in XY plane. From previous position and velocity and current position 
+# Cube's simulator-synchronized linear velocity in the world XY plane.
 def cube_linear_velocity_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
@@ -484,32 +443,11 @@ def cube_linear_velocity_xy(
     spike_std: float = 0.0,
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
-    cube_xy = cube.data.root_pos_w[:, :2]
+    velocity_xy = cube.data.root_lin_vel_w[:, :2]
 
-    if (
-        not hasattr(env, "_push_prev_cube_pos_xy_obs")
-        or env._push_prev_cube_pos_xy_obs.shape != cube_xy.shape
-    ):
-        env._push_prev_cube_pos_xy_obs = cube_xy.clone()
-        env._push_prev_cube_vel_xy_obs = torch.zeros_like(cube_xy)
-        env._push_cube_vel_obs_last_step = -1
-
-    current_step = int(env.common_step_counter)
-    if getattr(env, "_push_cube_vel_obs_last_step", -1) != current_step:
-        dt = _env_step_time_s(env) # high level policy dt (~15hz)
-        reset_mask = env.episode_length_buf == 0
-        env._push_prev_cube_pos_xy_obs[reset_mask] = cube_xy[reset_mask]
-
-        vel_xy = (cube_xy - env._push_prev_cube_pos_xy_obs) / dt
-        vel_xy[reset_mask] = 0.0
-
-        env._push_prev_cube_vel_xy_obs = vel_xy
-        env._push_prev_cube_pos_xy_obs = cube_xy.clone()
-        env._push_cube_vel_obs_last_step = current_step
-
-    return _corrupt_xy_observation(
+    observation = _corrupt_xy_observation(
         env=env,
-        obs_xy=env._push_prev_cube_vel_xy_obs,
+        obs_xy=velocity_xy,
         state_prefix="_push_cube_vel_obs",
         reset_mask=env.episode_length_buf == 0,
         noise_std=noise_std,
@@ -518,6 +456,8 @@ def cube_linear_velocity_xy(
         spike_prob=spike_prob,
         spike_std=spike_std,
     )
+    env._last_cube_velocity_xy_observation = observation.detach()
+    return observation
 
 
 def goal_position_xy(env: ManagerBasedRLEnv, goal_xy: tuple[float, float] = (0.0, 0.0)) -> torch.Tensor:
@@ -581,6 +521,13 @@ def robot_position_xy(
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     return robot.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
+
+
+def last_high_level_command(
+    env: ManagerBasedRLEnv, action_name: str = "pre_trained_policy_action"
+) -> torch.Tensor:
+    """Return the bounded velocity command actually sent to the low-level policy."""
+    return env.action_manager.get_term(action_name).raw_actions
 
 
 def robot_linear_velocity_xy(

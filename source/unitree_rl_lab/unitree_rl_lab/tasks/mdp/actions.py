@@ -61,9 +61,19 @@ class DelayedJointPositionActionCfg(JointPositionActionCfg):
 
 
 class ResettablePreTrainedPolicyAction(PreTrainedPolicyAction):
-    """Pre-trained policy action that resets its nested low-level action term."""
+    """Bounded pre-trained policy command that resets its nested low-level action term."""
 
     cfg: ResettablePreTrainedPolicyActionCfg
+
+    def __init__(self, cfg: ResettablePreTrainedPolicyActionCfg, env):
+        super().__init__(cfg, env)
+        if len(cfg.command_limits) != self.action_dim or any(limit <= 0.0 for limit in cfg.command_limits):
+            raise ValueError(f"command_limits must contain {self.action_dim} positive values")
+        self._command_limits = torch.tensor(cfg.command_limits, device=self.device, dtype=torch.float32)
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        """Clamp x, y, and yaw commands to the configured physical limits."""
+        self._raw_actions[:] = torch.clamp(actions, min=-self._command_limits, max=self._command_limits)
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         if env_ids is None:
@@ -75,6 +85,7 @@ class ResettablePreTrainedPolicyAction(PreTrainedPolicyAction):
 
 @configclass
 class ResettablePreTrainedPolicyActionCfg(PreTrainedPolicyActionCfg):
-    """Configuration for a reset-aware hierarchical policy action."""
+    """Configuration for a bounded, reset-aware hierarchical policy action."""
 
     class_type: type[ActionTerm] = ResettablePreTrainedPolicyAction
+    command_limits: tuple[float, float, float] = (1.0, 1.0, 1.0)

@@ -88,6 +88,7 @@ def foot_force(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=".*_foot"),
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    record_low_level_sample: bool = False,
 ) -> torch.Tensor:
     """Return compressive contact force along each Go2 foot's local sensor axis."""
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
@@ -137,6 +138,13 @@ def foot_force(
     # Keep invalid sensor samples out of the policy observation.
     # raw += torch.tensor([3.0, 0.0, 4.0, 4.0], device=raw.device) # Just to simulate real measurements.
     raw = torch.nan_to_num(raw, nan=0.0, posinf=200.0, neginf=0.0)
+    # Expose the unscaled value so play.py can sample all high-level signals in
+    # one row after the environment step has completed.
+    env._last_foot_force_observation = raw.detach()
+    if record_low_level_sample:
+        record_callback = getattr(env, "_play_record_callback", None)
+        if record_callback is not None:
+            record_callback()
 
     step = env.common_step_counter
     should_print = (

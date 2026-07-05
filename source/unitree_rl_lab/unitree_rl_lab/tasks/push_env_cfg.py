@@ -31,23 +31,19 @@ GOAL_RADIUS_M = 0.2
 # Base frame axes used by this env are +x forward and +y left.
 # Camera annotation used +y right, so we negate y when converting points.
 CUBE_CAMERA_REGION_POLYGON_XY_BASE = (
-    (0.05, -0.20),
-    (0.05, 0.20),
-    (0.75, 0.75),
-    (0.75, -0.75),
+    (0.08, -0.15), # close right corner
+    (0.08, 0.15),  # close left corner (x (forward), y (sideways (>0 left, <0 right)))
+    (0.65, 0.40),  # far left corner
+    (0.65, -0.40), # far right corner
 )
 
 HIGH_LEVEL_POLICY_HZ = 15.0
 
-# Curriculum step parameters
-CMD_CURRICULUM_STEP_SIZE = 500  # Number of steps before each increment ((env.common_step_counter) = total_steps/num_envs)
-CMD_CURRICULUM_LIN_VEL_INCREMENT = 0.05  # Linear velocity increment per step
-CMD_CURRICULUM_ANG_VEL_INCREMENT = 0.02  # Angular velocity increment per step
 CMD_INIT_LIN_VEL_ABS = 0.05 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.025
-CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
-CMD_LIMIT_LIN_VEL_Y_ABS = 0.5
-CMD_LIMIT_ANG_VEL_Z_ABS = 0.8
+CMD_LIMIT_LIN_VEL_X_ABS = 1.0 # Final limit
+CMD_LIMIT_LIN_VEL_Y_ABS = 0.8
+CMD_LIMIT_ANG_VEL_Z_ABS = 1.0
 
 SCALE_BACK_VEL = 1.0 # used to reduce use of backward vel but working as good. 
 SCALE_SIDE_VEL = 1.0 # used to reduce use of side vel but working as good
@@ -59,7 +55,7 @@ SUCCESS_HOLD_TIME_S = 0.6
 SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN = 0.05
 SUCCESS_ROBOT_SPEED_THRESHOLD = 0.15
 
-CUBE_POS_OBS_NOISE_STD = 0.035 # m
+CUBE_POS_OBS_NOISE_STD = 0.04 # m
 CUBE_VEL_OBS_NOISE_STD = 0.5 # m/s
 CUBE_POS_OBS_DROPOUT_PROB = 0.07 
 CUBE_VEL_OBS_DROPOUT_PROB = 0.07
@@ -67,8 +63,8 @@ CUBE_POS_OBS_DELAY_STEPS = 1 # 65ms
 CUBE_VEL_OBS_DELAY_STEPS = 1 # 65ms
 CUBE_POS_OBS_SPIKE_PROB = 0.1
 CUBE_VEL_OBS_SPIKE_PROB = 0.1
-CUBE_POS_OBS_SPIKE_STD = 0.15
-CUBE_VEL_OBS_SPIKE_STD = 1.5
+CUBE_POS_OBS_SPIKE_STD = 0.2
+CUBE_VEL_OBS_SPIKE_STD = 1.0
 
 def _hz_to_decimation(policy_hz: float, sim_dt: float) -> int:
     return max(1, int(round(1.0 / (sim_dt * policy_hz))))
@@ -211,7 +207,10 @@ class LowLevelObsCfg(ObsGroup):
         func=mdp.foot_force,
         scale=0.01,
         clip=(0, 150),
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+            "record_low_level_sample": True,
+        },
     )
     actions = ObsTerm(func=mdp.last_action, clip=(-100, 100))
 
@@ -345,7 +344,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "mass_distribution_params": (0.5, 1.50), # min. and max. percent of original
+            "mass_distribution_params": (0.25, 1.25), # min. and max. percent of original
             "operation": "scale",
         },
     )
@@ -444,6 +443,7 @@ class ActionsCfg:
     pre_trained_policy_action: mdp.ResettablePreTrainedPolicyActionCfg = mdp.ResettablePreTrainedPolicyActionCfg(
         asset_name="robot",
         policy_path=LOW_LEVEL_POLICY_PATH,
+        command_limits=(CMD_LIMIT_LIN_VEL_X_ABS, CMD_LIMIT_LIN_VEL_Y_ABS, CMD_LIMIT_ANG_VEL_Z_ABS),
         low_level_decimation=LOW_LEVEL_DECIMATION,
         low_level_actions=LOW_LEVEL_ENV_CFG.actions.JointPositionAction,
         low_level_observations=LowLevelObsCfg(),
@@ -457,16 +457,17 @@ class ObservationsCfg:
 
     @configclass
     class PolicyCfg(ObsGroup):
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05)
-        previous_action = ObsTerm(func=mdp.last_action)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, clip=(-100, 100))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, clip=(-100, 100))
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, clip=(-100, 100))
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
+        previous_action = ObsTerm(func=push_mdp.last_high_level_command, clip=(-100, 100))
 
-        robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy)
-        robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy)
+        robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy, clip=(-100, 100))
+        robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy, clip=(-100, 100))
         cube_pos_xy = ObsTerm(
             func=push_mdp.cube_position_xy,
+            clip=(-100, 100),
             params={
                 "noise_std": CUBE_POS_OBS_NOISE_STD,
                 "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
@@ -477,6 +478,7 @@ class ObservationsCfg:
         )
         cube_lin_vel_xy = ObsTerm(
             func=push_mdp.cube_linear_velocity_xy,
+            clip=(-100, 100),
             params={
                 "noise_std": CUBE_VEL_OBS_NOISE_STD,
                 "dropout_prob": CUBE_VEL_OBS_DROPOUT_PROB,
@@ -485,10 +487,11 @@ class ObservationsCfg:
                 "spike_std": CUBE_VEL_OBS_SPIKE_STD,
             },
         )
-        goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
-        goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
+        goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, clip=(-100, 100), params={"goal_xy": GOAL_XY})
+        goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, clip=(-100, 100), params={"goal_radius": GOAL_RADIUS_M})
         cube_to_goal_xy = ObsTerm(
             func=push_mdp.cube_to_goal_vector_xy,
+            clip=(-100, 100),
             params={
                 "goal_xy": GOAL_XY,
                 "noise_std": CUBE_POS_OBS_NOISE_STD,
@@ -500,6 +503,7 @@ class ObservationsCfg:
         )
         lf_foot_to_cube_xy = ObsTerm(
             func=push_mdp.left_front_foot_to_cube_vector_xy,
+            clip=(-100, 100),
             params={
                 "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
                 "cube_cfg": SceneEntityCfg("cube"),
@@ -527,18 +531,19 @@ class ObservationsCfg:
 
     @configclass
     class CriticCfg(ObsGroup):
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2)
-        projected_gravity = ObsTerm(func=mdp.projected_gravity)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05)
-        joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01)
-        previous_action = ObsTerm(func=mdp.last_action)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, clip=(-100, 100))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, clip=(-100, 100))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, clip=(-100, 100))
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, clip=(-100, 100))
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
+        joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01, clip=(-100, 100))
+        previous_action = ObsTerm(func=push_mdp.last_high_level_command, clip=(-100, 100))
 
-        robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy)
-        robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy)
+        robot_pos_xy = ObsTerm(func=push_mdp.robot_position_xy, clip=(-100, 100))
+        robot_lin_vel_xy = ObsTerm(func=push_mdp.robot_linear_velocity_xy, clip=(-100, 100))
         cube_pos_xy = ObsTerm(
             func=push_mdp.cube_position_xy,
+            clip=(-100, 100),
             params={
                 "noise_std": CUBE_POS_OBS_NOISE_STD,
                 "dropout_prob": CUBE_POS_OBS_DROPOUT_PROB,
@@ -549,6 +554,7 @@ class ObservationsCfg:
         )
         cube_lin_vel_xy = ObsTerm(
             func=push_mdp.cube_linear_velocity_xy,
+            clip=(-100, 100),
             params={
                 "noise_std": CUBE_VEL_OBS_NOISE_STD,
                 "dropout_prob": CUBE_VEL_OBS_DROPOUT_PROB,
@@ -557,10 +563,11 @@ class ObservationsCfg:
                 "spike_std": CUBE_VEL_OBS_SPIKE_STD,
             },
         )
-        goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, params={"goal_xy": GOAL_XY})
-        goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, params={"goal_radius": GOAL_RADIUS_M})
+        goal_pos_xy = ObsTerm(func=push_mdp.goal_position_xy, clip=(-100, 100), params={"goal_xy": GOAL_XY})
+        goal_radius = ObsTerm(func=push_mdp.goal_radius_obs, clip=(-100, 100), params={"goal_radius": GOAL_RADIUS_M})
         cube_to_goal_xy = ObsTerm(
             func=push_mdp.cube_to_goal_vector_xy,
+            clip=(-100, 100),
             params={
                 "goal_xy": GOAL_XY,
                 "noise_std": CUBE_POS_OBS_NOISE_STD,
@@ -572,6 +579,7 @@ class ObservationsCfg:
         )
         lf_foot_to_cube_xy = ObsTerm(
             func=push_mdp.left_front_foot_to_cube_vector_xy,
+            clip=(-100, 100),
             params={
                 "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
                 "cube_cfg": SceneEntityCfg("cube"),
@@ -857,24 +865,7 @@ class TerminationsCfg:
 
 @configclass
 class CurriculumCfg:
-    """Curriculum terms for push command magnitudes (stepwise increments)."""
-
-    # Overrides Settings set in CommandsCfg
-    command_velocity_envelope = CurrTerm(
-        func=push_mdp.command_velocity_envelope_stepwise_curriculum,
-        params={
-            "step_size": CMD_CURRICULUM_STEP_SIZE,
-            "lin_vel_increment": CMD_CURRICULUM_LIN_VEL_INCREMENT,
-            "ang_vel_increment": CMD_CURRICULUM_ANG_VEL_INCREMENT,
-            "initial_lin_vel_abs": CMD_INIT_LIN_VEL_ABS,
-            "initial_ang_vel_abs": CMD_INIT_ANG_VEL_ABS,
-            "limit_lin_vel_x": CMD_LIMIT_LIN_VEL_X_ABS,
-            "limit_lin_vel_y": CMD_LIMIT_LIN_VEL_Y_ABS,
-            "limit_ang_vel_z": CMD_LIMIT_ANG_VEL_Z_ABS,
-            "scale_back_vel": SCALE_BACK_VEL,
-            "scale_side_vel": SCALE_SIDE_VEL,
-        },
-    )
+    """Progress and reward-transition curriculum terms."""
     
     common_step_counter = CurrTerm(
         func=push_mdp.curriculum_common_step_counter,
@@ -924,6 +915,9 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 32
+        # Pack environments slightly closer for play/video without changing training spacing.
+        self.scene.env_spacing = 6.0
+        self.scene.terrain.terrain_generator.size = (6.0, 6.0)
         self.observations.policy.enable_corruption = False
         self.observations.critic.enable_corruption = False
         self.rewards.cube_outside_camera_region_penalty.params["debug_vis"] = True

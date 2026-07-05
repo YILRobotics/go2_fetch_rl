@@ -34,8 +34,8 @@ import cli_args  # isort: skip
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
-VIDEO_WIDTH = 1280 # 1920
-VIDEO_HEIGHT = 720 # 1080
+VIDEO_WIDTH = 1920 # 1280 # 1920
+VIDEO_HEIGHT = 1080 # 720 # 1080
 # DEFAULT_VIDEO_NUM_ENVS = 32
 # MAX_VIDEO_NUM_ENVS = 256
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
