@@ -69,11 +69,30 @@ class ResettablePreTrainedPolicyAction(PreTrainedPolicyAction):
         super().__init__(cfg, env)
         if len(cfg.command_limits) != self.action_dim or any(limit <= 0.0 for limit in cfg.command_limits):
             raise ValueError(f"command_limits must contain {self.action_dim} positive values")
+        if len(cfg.initial_command_limits) != self.action_dim or any(
+            limit <= 0.0 for limit in cfg.initial_command_limits
+        ):
+            raise ValueError(f"initial_command_limits must contain {self.action_dim} positive values")
         self._command_limits = torch.tensor(cfg.command_limits, device=self.device, dtype=torch.float32)
+        self._initial_command_limits = torch.tensor(
+            cfg.initial_command_limits, device=self.device, dtype=torch.float32
+        )
 
     def process_actions(self, actions: torch.Tensor) -> None:
-        """Clamp x, y, and yaw commands to the configured physical limits."""
-        self._raw_actions[:] = torch.clamp(actions, min=-self._command_limits, max=self._command_limits)
+        """Smoothly bound commands while increasing their limits during early training."""
+        if self.cfg.command_limit_curriculum_steps <= 0:
+            alpha = 1.0
+        else:
+            alpha = min(1.0, self._env.common_step_counter / self.cfg.command_limit_curriculum_steps)
+        active_limits = self._initial_command_limits + alpha * (
+            self._command_limits - self._initial_command_limits
+        )
+        # self._raw_actions[:] = torch.tanh(actions) * active_limits
+        self._raw_actions[:] = torch.clamp(
+            actions,
+            min=-active_limits,
+            max=active_limits,
+        )
 
     def reset(self, env_ids: Sequence[int] | None = None) -> None:
         if env_ids is None:
@@ -89,3 +108,5 @@ class ResettablePreTrainedPolicyActionCfg(PreTrainedPolicyActionCfg):
 
     class_type: type[ActionTerm] = ResettablePreTrainedPolicyAction
     command_limits: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    initial_command_limits: tuple[float, float, float] = (0.1, 0.1, 0.1)
+    command_limit_curriculum_steps: int = 0
