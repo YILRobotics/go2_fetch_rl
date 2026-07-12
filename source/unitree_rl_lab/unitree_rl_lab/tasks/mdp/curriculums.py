@@ -22,7 +22,7 @@ def lin_vel_cmd_levels(
 
     if env.common_step_counter % env.max_episode_length == 0:
         if reward > reward_term.weight * 0.8:
-            delta_command = torch.tensor([-0.1, 0.1], device=env.device)
+            delta_command = torch.tensor([-0.2, 0.2], device=env.device)
             ranges.lin_vel_x = torch.clamp(
                 torch.tensor(ranges.lin_vel_x, device=env.device) + delta_command,
                 limit_ranges.lin_vel_x[0],

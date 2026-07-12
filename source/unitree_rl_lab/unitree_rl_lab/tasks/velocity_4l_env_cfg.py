@@ -34,24 +34,24 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
     sub_terrains={
         "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.1, noise_range=(0.01, 0.06), noise_step=0.01, border_width=0.25
+            proportion=0.1, noise_range=(0.005, 0.03), noise_step=0.01, border_width=0.25
         ),
         "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
             proportion=0.1,
-            slope_range=(0.0, 0.4),
+            slope_range=(0.0, 0.2),
             platform_width=2.0,
             border_width=0.25,
         ),
         "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
             proportion=0.1,
-            slope_range=(0.0, 0.4),
+            slope_range=(0.0, 0.2),
             platform_width=2.0,
             border_width=0.25,
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.1,
             grid_width=0.45,
-            grid_height_range=(0.02, 0.15),
+            grid_height_range=(0.01, 0.06),
             platform_width=2.0,
         ),
         # "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
@@ -133,9 +133,10 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.3, 1.2),
-            "dynamic_friction_range": (0.3, 1.2),
-            "restitution_range": (0.0, 0.15),
+            "static_friction_range": (0.65, 1.8),
+            "dynamic_friction_range": (0.55, 1.4),
+            "restitution_range": (0.0, 0.1),
+            "make_consistent": True,
             "num_buckets": 64,
         },
     )
@@ -147,6 +148,18 @@ class EventCfg:
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
             "mass_distribution_params": (-1.0, 3.0),
             "operation": "add",
+        },
+    )
+
+    randomize_motor_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "stiffness_distribution_params": (0.93, 1.07),
+            "damping_distribution_params": (0.9, 1.1),
+            "operation": "scale",
+            "distribution": "uniform",
         },
     )
 
@@ -201,15 +214,15 @@ class CommandsCfg:
 
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.1,
+        resampling_time_range=(8.0, 10.0),
+        rel_standing_envs=0.2,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
+            lin_vel_x=(-0.8, 0.8), lin_vel_y=(-0.6, 0.6), ang_vel_z=(-1.0, 1.0)
         ), # command sampling range used during normal training command generation
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
-        ), # wider allowable envelope for the same command dimensions. For wider allowable envelope for the same command dimensions.
+            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.8, 0.8), ang_vel_z=(-1.0, 1.0)
+        ), # wider allowable envelope for the same command dimensions. 
     )
 
 
@@ -217,12 +230,14 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    JointPositionAction = mdp.JointPositionActionCfg(
+    JointPositionAction = mdp.DelayedJointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*"],
         scale=0.25,
         use_default_offset=True,
         clip={".*": (-100.0, 100.0)},
+        min_delay=0,
+        max_delay=1,
     )
 
 
@@ -262,6 +277,12 @@ class ObservationsCfg:
             clip=(-100, 100),
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )
+        foot_force = ObsTerm(
+            func=mdp.foot_force,
+            scale=0.01,
+            clip=(0, 150),
+            params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+        )
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
 
         def __post_init__(self):
@@ -286,6 +307,12 @@ class ObservationsCfg:
         )
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, clip=(-100, 100))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
+        foot_force = ObsTerm(
+            func=mdp.foot_force,
+            scale=0.01,
+            clip=(0, 150),
+            params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
+        )
         joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01, clip=(-100, 100))
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
         # height_scanner = ObsTerm(func=mdp.height_scan,
@@ -320,9 +347,9 @@ class RewardsCfg:
     base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-3.0e-7)
     joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2e-4)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.16)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-10.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 
@@ -430,7 +457,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 4
         self.episode_length_s = 20.0
         # simulation settings
-        self.sim.dt = 0.005
+        self.sim.dt = 0.005 # 50hz
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
@@ -464,5 +491,21 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         self.scene.terrain.terrain_generator.num_cols = COBBLESTONE_ROAD_CFG.num_cols
         self.scene.terrain.max_init_terrain_level = COBBLESTONE_ROAD_CFG.num_rows - 1
         self.scene.terrain.terrain_generator.curriculum = False
+
+        # Just plane wihtou any terrain generator
+        # self.scene.terrain.terrain_type = "plane"
+        # self.scene.terrain.terrain_generator = None
+        # self.scene.terrain.max_init_terrain_level = None
+        # self.curriculum.terrain_levels = None
+
         
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+        self.curriculum.lin_vel_cmd_levels = None      
+
+        # Set cmd vel manually for play
+        # self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
+        #     lin_vel_x=(0.0, 0.0),
+        #     lin_vel_y=(0.0, 0.0),
+        #     ang_vel_z=(0.0, 0.0),
+        # )
+        # self.commands.base_velocity.rel_standing_envs = 0.0

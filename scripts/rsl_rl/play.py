@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import csv
 import os
 from importlib.metadata import version
 from pathlib import Path
@@ -38,14 +39,16 @@ parser.add_argument(
     "--camera_eye",
     type=float,
     nargs=3,
-    default=[-5.5, 0.0, 6.0],
+    # default=[-25.0, 0.0, 5.0],
+    default=[-8.0, 8.0, 4.5],
     help="Camera eye position for fixed/follow modes.",
 )
 parser.add_argument(
     "--camera_lookat",
     type=float,
     nargs=3,
-    default=[6.0, 0.0, 1.0],
+    # default=[-10.0, 0.0, 1.0],
+    default=[-1.5, 1.5, 0.0],
     help="Camera look-at target for fixed/follow modes.",
 )
 parser.add_argument(
@@ -130,6 +133,67 @@ import unitree_rl_lab.tasks  # noqa: F401
 from unitree_rl_lab.utils.parser_cfg import parse_env_cfg
 
 
+def _flatten_observation(value) -> list[float]:
+    """Flatten a scalar or nested observation value into CSV-compatible floats."""
+    if isinstance(value, (list, tuple)):
+        return [component for item in value for component in _flatten_observation(item)]
+    return [float(value)]
+
+
+def _all_observation_columns(unwrapped) -> tuple[list[str], list[float]]:
+    """Return named components for every cached policy and critic observation term."""
+    columns: list[str] = []
+    values: list[float] = []
+    for qualified_name, term_value in unwrapped.observation_manager.get_active_iterable_terms(env_idx=0):
+        group_name, term_name = qualified_name.split("-", maxsplit=1)
+        components = _flatten_observation(term_value)
+        columns.extend(
+            f"obs__{group_name}__{term_name}__{component_index}"
+            for component_index in range(len(components))
+        )
+        values.extend(components)
+    return columns, values
+
+
+def _record_high_level_observations(env) -> None:
+    """Append environment zero's high-level play observations to one CSV row."""
+    unwrapped = env.unwrapped
+    foot_force = getattr(unwrapped, "_last_foot_force_observation", None)
+    cube_position = getattr(unwrapped, "_last_cube_position_xy_observation", None)
+    cube_velocity = getattr(unwrapped, "_last_cube_velocity_xy_observation", None)
+    if foot_force is None or cube_position is None or cube_velocity is None:
+        return
+
+    record_path = Path(unwrapped.foot_force_record_path)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not record_path.exists()
+    step = getattr(unwrapped, "_play_record_sample", 0)
+    record_dt = unwrapped._play_record_dt
+    command = unwrapped.action_manager.get_term("pre_trained_policy_action").raw_actions
+    observation_columns, observation_values = _all_observation_columns(unwrapped)
+    row = [step, step * record_dt]
+    # Record only environment 0; the other parallel environments are not written to this CSV.
+    row.extend(foot_force[0].cpu().tolist())
+    row.extend(command[0, :3].detach().cpu().tolist())
+    row.extend(cube_position[0].cpu().tolist())
+    row.extend(cube_velocity[0].cpu().tolist())
+    row.extend(observation_values)
+
+    with record_path.open("a", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        if write_header:
+            writer.writerow(
+                ["step", "time_s"]
+                + [f"normal_force_foot_{index}" for index in range(4)]
+                + ["cmd_lin_vel_x", "cmd_lin_vel_y", "cmd_ang_vel_z"]
+                + ["cube_pos_obs_x", "cube_pos_obs_y"]
+                + ["cube_vel_obs_x", "cube_vel_obs_y"]
+                + observation_columns
+            )
+        writer.writerow(row)
+    unwrapped._play_record_sample = step + 1
+
+
 def _apply_play_terrain_overrides(env_cfg):
     """Apply optional terrain-generator overrides from CLI for play runs."""
     if args_cli.terrain_rows is None and args_cli.terrain_cols is None:
@@ -183,33 +247,26 @@ def _rotate_existing_video_file(path: Path):
     print(f"[INFO] Existing video renamed to avoid overwrite: {dst}")
 
 
-def _renumber_videos_by_age(video_folder: str) -> Path | None:
-    """Rename rl-video-step-0*.mp4 so newest gets the highest suffix."""
+def _rename_recorded_video(video_folder: str, prefix: str, timestamp: str) -> Path | None:
+    """Give the newest Gym video a task-specific timestamped name."""
     folder = Path(video_folder)
     if not folder.exists():
         print(f"[WARN] Video folder does not exist: {folder}")
         return None
 
-    videos = sorted(
-        folder.glob("rl-video-step-0*.mp4"),
-        key=lambda p: (p.stat().st_mtime, p.name),
-    )
+    videos = list(folder.glob("rl-video-step-*.mp4"))
     if not videos:
         print(f"[WARN] No videos found in: {folder}")
         return None
 
-    temp_paths: list[Path] = []
-    for idx, src in enumerate(videos):
-        tmp = folder / f".tmp_rl_video_{idx}.mp4"
-        src.rename(tmp)
-        temp_paths.append(tmp)
+    source = max(videos, key=lambda path: path.stat().st_mtime)
+    destination = _unique_video_path(folder / f"{prefix}_video_{timestamp}.mp4")
+    source.rename(destination)
 
-    newest_path = None
-    for idx, tmp in enumerate(temp_paths, start=1):
-        dst = folder / f"rl-video-step-0_{idx}.mp4"
-        tmp.rename(dst)
-        newest_path = dst
-    return newest_path
+    source_metadata = source.with_suffix(".meta.json")
+    if source_metadata.exists():
+        source_metadata.rename(destination.with_suffix(".meta.json"))
+    return destination
 
 
 def main():
@@ -253,7 +310,7 @@ def main():
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO*q experiment from directory: {log_root_path}")
     if args_cli.use_pretrained_checkpoint:
         resume_path = get_published_pretrained_checkpoint("rsl_rl", args_cli.task)
         if not resume_path:
@@ -265,6 +322,9 @@ def main():
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     log_dir = os.path.dirname(resume_path)
+    recording_timestamp = time.strftime("%Y%m%d_%H%M%S")
+    task_name = (args_cli.task or "").lower()
+    video_prefix = "push" if "push" in task_name else "vel" if "velocity" in task_name else "play"
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -281,7 +341,7 @@ def main():
         _rotate_existing_video_file(Path(video_folder) / "rl-video-step-0.meta.json")
         video_kwargs = {
             "video_folder": video_folder,
-            "step_trigger": lambda step: step == 0,
+            "step_trigger": lambda step: step == 1,
             "video_length": args_cli.video_length,
             "disable_logger": True,
         }
@@ -291,6 +351,23 @@ def main():
 
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    env.unwrapped.print_foot_force = True
+    try:
+        env.unwrapped.scene["cube"]
+        record_high_level_observations = True
+    except KeyError:
+        record_high_level_observations = False
+    # Non-push tasks keep the existing observation-level foot-force recorder.
+    env.unwrapped.record_foot_force = not record_high_level_observations
+    env.unwrapped.foot_force_record_path = os.path.join(
+        log_dir, "recordings", "play", f"recording_{recording_timestamp}.csv"
+    )
+    if record_high_level_observations:
+        high_level_action = env.unwrapped.action_manager.get_term("pre_trained_policy_action")
+        env.unwrapped._play_record_sample = 0
+        env.unwrapped._play_record_dt = env.unwrapped.physics_dt * high_level_action.cfg.low_level_decimation
+        env.unwrapped._play_record_callback = lambda: _record_high_level_observations(env)
+    print(f"[INFO]: Recording play observations to: {env.unwrapped.foot_force_record_path}")
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
@@ -363,7 +440,7 @@ def main():
     # close the simulator
     env.close()
     if args_cli.video and video_folder is not None:
-        newest_video = _renumber_videos_by_age(video_folder)
+        newest_video = _rename_recorded_video(video_folder, video_prefix, recording_timestamp)
         if newest_video is not None:
             print(f"[INFO] Newest video file: {newest_video.resolve()}")
 

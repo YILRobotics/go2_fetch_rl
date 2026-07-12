@@ -12,7 +12,6 @@ import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sim.utils.stage import get_current_stage
-from isaaclab.sensors import ContactSensor
 from unitree_rl_lab.tasks import mdp
 
 try:
@@ -328,49 +327,6 @@ def _symmetric_curriculum_range(limit_range: tuple[float, float], initial_abs: f
     return [-current_abs, current_abs]
 
 
-def command_velocity_envelope_stepwise_curriculum(
-    env,
-    env_ids,
-    step_size: int = 5000,
-    lin_vel_increment: float = 0.05,
-    ang_vel_increment: float = 0.02,
-    initial_lin_vel_abs: float = 0.05,
-    initial_ang_vel_abs: float = 0.02,
-    limit_lin_vel_x: float = 0.6,
-    limit_lin_vel_y: float = 0.5,
-    limit_ang_vel_z: float = 0.3,
-    scale_back_vel: float = 1.0,
-    scale_side_vel: float = 1.0,
-):
-    """Increase command velocity limits in steps after every step_size steps.
-
-    Supports asymmetric envelopes:
-    - backward speed can be scaled via ``scale_back_vel`` for x-command
-    - lateral speed can be scaled via ``scale_side_vel`` for y-command
-    """
-    del env_ids
-    command_term = env.command_manager.get_term("base_velocity")
-    ranges = command_term.cfg.ranges
-    limit_ranges = command_term.cfg.limit_ranges
-
-    # Number of increments so far
-    n_increments = int(env.common_step_counter // step_size)
-    # Compute new abs limits
-    lin_vel_x_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_x)
-    lin_vel_y_abs = min(initial_lin_vel_abs + n_increments * lin_vel_increment, limit_lin_vel_y)
-    ang_vel_abs = min(initial_ang_vel_abs + n_increments * ang_vel_increment, limit_ang_vel_z)
-    back_scale = max(0.0, float(scale_back_vel))
-    side_scale = max(0.0, float(scale_side_vel))
-
-    # Set ranges (supports asymmetric backward / lateral scaling).
-    ranges.lin_vel_x = [-lin_vel_x_abs * back_scale, lin_vel_x_abs]
-    ranges.lin_vel_y = [-lin_vel_y_abs * side_scale, lin_vel_y_abs * side_scale]
-    ranges.ang_vel_z = [-ang_vel_abs, ang_vel_abs]
-
-    # For logging: return the current increment
-    return lin_vel_x_abs
-
-
 def curriculum_common_step_counter(env, env_ids):
     """Expose per-environment step progress for logger backends (TensorBoard/W&B)."""
     del env_ids
@@ -389,6 +345,18 @@ def curriculum_goal_reward_alpha(
     return min(1.0, max(0.0, float(env.common_step_counter) / float(transition_steps)))
 
 
+def timeout_cube_goal_distance_penalty(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    max_distance: float = 1.0,
+) -> torch.Tensor:
+    """Penalize timeout in proportion to remaining cube-goal distance."""
+    distance = _cube_goal_distance(env, cube_cfg=cube_cfg, goal_xy=goal_xy)
+    distance = torch.clamp(distance, max=max(0.0, float(max_distance)))
+    return env.termination_manager.time_outs.float() * distance
+
+
 def _corrupt_xy_observation(
     env: ManagerBasedRLEnv,
     obs_xy: torch.Tensor,
@@ -399,7 +367,16 @@ def _corrupt_xy_observation(
     delay_steps: int = 0,
     spike_prob: float = 0.0,
     spike_std: float = 0.0,
+    curriculum_steps: int = 0,
 ) -> torch.Tensor:
+    corruption_alpha = (
+        1.0
+        if curriculum_steps <= 0
+        else min(1.0, max(0.0, float(env.common_step_counter) / float(curriculum_steps)))
+    )
+    noise_std *= corruption_alpha
+    dropout_prob *= corruption_alpha
+    spike_prob *= corruption_alpha
     delay_steps = max(0, int(delay_steps))
     history_len = delay_steps + 1
 
@@ -458,11 +435,12 @@ def cube_position_xy(
     delay_steps: int = 0,
     spike_prob: float = 0.0,
     spike_std: float = 0.0,
+    curriculum_steps: int = 0,
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
     cube_xy = cube.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
     reset_mask = env.episode_length_buf == 0
-    return _corrupt_xy_observation(
+    observation = _corrupt_xy_observation(
         env=env,
         obs_xy=cube_xy,
         state_prefix="_push_cube_pos_obs",
@@ -472,9 +450,12 @@ def cube_position_xy(
         delay_steps=delay_steps,
         spike_prob=spike_prob,
         spike_std=spike_std,
+        curriculum_steps=curriculum_steps,
     )
+    env._last_cube_position_xy_observation = observation.detach()
+    return observation
 
-# Cube's linear velocity in XY plane. From previous position and velocity and current position 
+# Cube's simulator-synchronized linear velocity in the world XY plane.
 def cube_linear_velocity_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
@@ -483,34 +464,14 @@ def cube_linear_velocity_xy(
     delay_steps: int = 0,
     spike_prob: float = 0.0,
     spike_std: float = 0.0,
+    curriculum_steps: int = 0,
 ) -> torch.Tensor:
     cube: RigidObject = env.scene[cube_cfg.name]
-    cube_xy = cube.data.root_pos_w[:, :2]
+    velocity_xy = cube.data.root_lin_vel_w[:, :2]
 
-    if (
-        not hasattr(env, "_push_prev_cube_pos_xy_obs")
-        or env._push_prev_cube_pos_xy_obs.shape != cube_xy.shape
-    ):
-        env._push_prev_cube_pos_xy_obs = cube_xy.clone()
-        env._push_prev_cube_vel_xy_obs = torch.zeros_like(cube_xy)
-        env._push_cube_vel_obs_last_step = -1
-
-    current_step = int(env.common_step_counter)
-    if getattr(env, "_push_cube_vel_obs_last_step", -1) != current_step:
-        dt = _env_step_time_s(env) # high level policy dt (~15hz)
-        reset_mask = env.episode_length_buf == 0
-        env._push_prev_cube_pos_xy_obs[reset_mask] = cube_xy[reset_mask]
-
-        vel_xy = (cube_xy - env._push_prev_cube_pos_xy_obs) / dt
-        vel_xy[reset_mask] = 0.0
-
-        env._push_prev_cube_vel_xy_obs = vel_xy
-        env._push_prev_cube_pos_xy_obs = cube_xy.clone()
-        env._push_cube_vel_obs_last_step = current_step
-
-    return _corrupt_xy_observation(
+    observation = _corrupt_xy_observation(
         env=env,
-        obs_xy=env._push_prev_cube_vel_xy_obs,
+        obs_xy=velocity_xy,
         state_prefix="_push_cube_vel_obs",
         reset_mask=env.episode_length_buf == 0,
         noise_std=noise_std,
@@ -518,7 +479,39 @@ def cube_linear_velocity_xy(
         delay_steps=delay_steps,
         spike_prob=spike_prob,
         spike_std=spike_std,
+        curriculum_steps=curriculum_steps,
     )
+    env._last_cube_velocity_xy_observation = observation.detach()
+    return observation
+
+
+def _world_xy_vector_to_base(
+    env: ManagerBasedRLEnv,
+    vector_xy_w: torch.Tensor,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Rotate an XY direction/velocity from world axes into robot base axes."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    vector_w = torch.cat((vector_xy_w, torch.zeros_like(vector_xy_w[:, :1])), dim=1)
+    return quat_apply_inverse(robot.data.root_quat_w, vector_w)[:, :2]
+
+
+def cube_linear_velocity_xy_base(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
+    curriculum_steps: int = 0,
+) -> torch.Tensor:
+    """Return the corrupted cube velocity observation in robot base axes."""
+    velocity_xy_w = cube_linear_velocity_xy(
+        env, cube_cfg, noise_std, dropout_prob, delay_steps, spike_prob, spike_std, curriculum_steps
+    )
+    return _world_xy_vector_to_base(env, velocity_xy_w, robot_cfg)
 
 
 def goal_position_xy(env: ManagerBasedRLEnv, goal_xy: tuple[float, float] = (0.0, 0.0)) -> torch.Tensor:
@@ -534,20 +527,88 @@ def cube_to_goal_vector_xy(
     env: ManagerBasedRLEnv,
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     goal_xy: tuple[float, float] = (0.0, 0.0),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
+    curriculum_steps: int = 0,
 ) -> torch.Tensor:
-    return goal_position_xy(env, goal_xy=goal_xy) - cube_position_xy(env, cube_cfg=cube_cfg)
+    cube_xy = cube_position_xy(
+        env,
+        cube_cfg=cube_cfg,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        delay_steps=delay_steps,
+        spike_prob=spike_prob,
+        spike_std=spike_std,
+        curriculum_steps=curriculum_steps,
+    )
+    return goal_position_xy(env, goal_xy=goal_xy) - cube_xy
+
+
+def cube_to_goal_vector_xy_base(
+    env: ManagerBasedRLEnv,
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
+    curriculum_steps: int = 0,
+) -> torch.Tensor:
+    """Return the corrupted cube-to-goal vector in robot base axes."""
+    vector_xy_w = cube_to_goal_vector_xy(
+        env, cube_cfg, goal_xy, noise_std, dropout_prob, delay_steps, spike_prob, spike_std, curriculum_steps
+    )
+    return _world_xy_vector_to_base(env, vector_xy_w, robot_cfg)
 
 
 def left_front_foot_to_cube_vector_xy(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
+    curriculum_steps: int = 0,
 ) -> torch.Tensor:
     robot: Articulation = env.scene[foot_cfg.name]
-    cube: RigidObject = env.scene[cube_cfg.name]
-    foot_xy = robot.data.body_pos_w[:, foot_cfg.body_ids, :2].mean(dim=1)
-    cube_xy = cube.data.root_pos_w[:, :2]
+    foot_xy = robot.data.body_pos_w[:, foot_cfg.body_ids, :2].mean(dim=1) - _scene_env_origins_xy(env)
+    cube_xy = cube_position_xy(
+        env,
+        cube_cfg=cube_cfg,
+        noise_std=noise_std,
+        dropout_prob=dropout_prob,
+        delay_steps=delay_steps,
+        spike_prob=spike_prob,
+        spike_std=spike_std,
+        curriculum_steps=curriculum_steps,
+    )
     return cube_xy - foot_xy
+
+
+def left_front_foot_to_cube_vector_xy_base(
+    env: ManagerBasedRLEnv,
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    noise_std: float = 0.0,
+    dropout_prob: float = 0.0,
+    delay_steps: int = 0,
+    spike_prob: float = 0.0,
+    spike_std: float = 0.0,
+    curriculum_steps: int = 0,
+) -> torch.Tensor:
+    """Return the corrupted left-front-foot-to-cube vector in robot base axes."""
+    vector_xy_w = left_front_foot_to_cube_vector_xy(
+        env, foot_cfg, cube_cfg, noise_std, dropout_prob, delay_steps, spike_prob, spike_std, curriculum_steps
+    )
+    return _world_xy_vector_to_base(env, vector_xy_w, robot_cfg)
 
 
 def robot_position_xy(
@@ -558,12 +619,51 @@ def robot_position_xy(
     return robot.data.root_pos_w[:, :2] - _scene_env_origins_xy(env)
 
 
+def last_high_level_command(
+    env: ManagerBasedRLEnv, action_name: str = "pre_trained_policy_action"
+) -> torch.Tensor:
+    """Return the bounded velocity command actually sent to the low-level policy."""
+    return env.action_manager.get_term(action_name).raw_actions
+
+
 def robot_linear_velocity_xy(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     return robot.data.root_lin_vel_w[:, :2]
+
+
+def cube_facing_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    min_distance: float = 0.25,
+) -> torch.Tensor:
+    """Penalize base-heading error to the cube while the robot is not in close contact."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+
+    cube_vector_xy_w = cube.data.root_pos_w[:, :2] - robot.data.root_pos_w[:, :2]
+    cube_heading_w = torch.atan2(cube_vector_xy_w[:, 1], cube_vector_xy_w[:, 0])
+
+    # Extract only world-frame yaw (Isaac Lab quaternions use w, x, y, z order).
+    # Using the full inverse quaternion here would let base roll and pitch distort
+    # the horizontal heading error.
+    qw, qx, qy, qz = robot.data.root_quat_w.unbind(dim=-1)
+    robot_yaw_w = torch.atan2(
+        2.0 * (qw * qz + qx * qy),
+        1.0 - 2.0 * (qy.square() + qz.square()),
+    )
+    yaw_error = torch.atan2(
+        torch.sin(cube_heading_w - robot_yaw_w),
+        torch.cos(cube_heading_w - robot_yaw_w),
+    )
+    distance = torch.linalg.norm(cube_vector_xy_w, dim=1)
+    active = distance > max(0.0, float(min_distance))
+
+    return active.float() * (1.0 - torch.cos(yaw_error))
+
 
 # This function gives a positive reward for the cube getting closer to the goal and a negative reward for moving away. 
 # The current distance from the cube to the goal is stored and compared to the previous step's distance to compute the progress.
@@ -984,14 +1084,18 @@ def robot_stop_after_goal_reward(
 
 def robot_to_cube_approach_progress_reward(
     env: ManagerBasedRLEnv,
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="F[LR]_foot.*"),
     cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     goal_xy: tuple[float, float] = (0.0, 0.0),
     cube_far_distance: float = 0.7,
     transition_steps: int = 50_000,
 ) -> torch.Tensor:
-    vec = left_front_foot_to_cube_vector_xy(env, foot_cfg=foot_cfg, cube_cfg=cube_cfg)
-    dist = torch.linalg.norm(vec, dim=1)
+    """Reward progress of the nearest front foot toward the cube."""
+    robot: Articulation = env.scene[foot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+    front_foot_xy = robot.data.body_pos_w[:, foot_cfg.body_ids, :2]
+    cube_xy = cube.data.root_pos_w[:, :2].unsqueeze(1)
+    dist = torch.linalg.norm(front_foot_xy - cube_xy, dim=2).min(dim=1).values
 
     if not hasattr(env, "_push_prev_foot_cube_dist"):
         env._push_prev_foot_cube_dist = dist.clone()
@@ -1005,6 +1109,36 @@ def robot_to_cube_approach_progress_reward(
     cube_goal_dist = _cube_goal_distance(env, cube_cfg=cube_cfg, goal_xy=goal_xy)
     gate = (cube_goal_dist > cube_far_distance).float()
     return (1.0 - _curriculum_alpha(env, transition_steps)) * gate * progress
+
+
+def robot_cube_goal_alignment_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    goal_xy: tuple[float, float] = (0.0, 0.0),
+    goal_radius: float = 0.35,
+    max_robot_cube_distance: float = 0.8,
+) -> torch.Tensor:
+    """Reward placing the robot behind the cube along the cube-to-goal line."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    cube: RigidObject = env.scene[cube_cfg.name]
+
+    robot_to_cube = cube.data.root_pos_w[:, :2] - robot.data.root_pos_w[:, :2]
+    env_ids = _cached_env_ids(env)
+    cube_to_goal = _goal_xy_world(env, env_ids, goal_xy) - cube.data.root_pos_w[:, :2]
+
+    robot_cube_dist = torch.linalg.norm(robot_to_cube, dim=1)
+    cube_goal_dist = torch.linalg.norm(cube_to_goal, dim=1)
+    cosine_alignment = torch.sum(robot_to_cube * cube_to_goal, dim=1) / (
+        robot_cube_dist * cube_goal_dist + 1e-6
+    )
+
+    # Only reward the correct half-plane. Proximity and goal gates prevent
+    # collecting this posture reward far from the cube or after task success.
+    alignment = torch.clamp(cosine_alignment, min=0.0, max=1.0)
+    active = (robot_cube_dist <= max_robot_cube_distance) & (cube_goal_dist > goal_radius)
+    return active.float() * alignment
+
 
 # This function gives a positive reward for the cube moving in the direction of the goal. It computes
 # the velocity of the cube in the XY plane and projects it onto the direction vector from the cube to
@@ -1027,7 +1161,7 @@ def push_direction_reward(
     moving_mask = (cube_speed > speed_threshold).float()
     cube_goal_dist = torch.linalg.norm(cube_goal_vec, dim=1)
     outside_goal_mask = (cube_goal_dist > (goal_radius + goal_margin)).float()
-    return _curriculum_alpha(env, transition_steps) * moving_mask * outside_goal_mask * torch.clamp(toward_goal_speed, min=0.0)
+    return _curriculum_alpha(env, transition_steps) * moving_mask * outside_goal_mask * toward_goal_speed
 
 
 def forward_push_reward(
@@ -1076,6 +1210,18 @@ def backward_body_velocity_penalty(
     robot: Articulation = env.scene[robot_cfg.name]
     backward_speed = torch.clamp(-robot.data.root_lin_vel_b[:, 0] - deadzone, min=0.0)
     return _curriculum_alpha(env, transition_steps) * backward_speed
+
+
+def sideways_body_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    deadzone: float = 0.02,
+    transition_steps: int = 50_000,
+) -> torch.Tensor:
+    """Penalize lateral base speed in either body-frame y direction."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    sideways_speed = torch.clamp(torch.abs(robot.data.root_lin_vel_b[:, 1]) - deadzone, min=0.0)
+    return _curriculum_alpha(env, transition_steps) * sideways_speed
 
 
 def cube_to_nearest_foot_distance_penalty(

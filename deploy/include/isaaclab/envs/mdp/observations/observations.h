@@ -102,6 +102,12 @@ REGISTER_OBSERVATION(joint_vel_rel)
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
+REGISTER_OBSERVATION(foot_force)
+{
+    auto & data = env->robot->data.foot_force;
+    return std::vector<float>(data.begin(), data.end());
+}
+
 REGISTER_OBSERVATION(last_action)
 {
     auto data = env->action_manager->action();

@@ -1,0 +1,43 @@
+[package]
+version = "0.1.0"
+title = "Go2 4L Walking"
+description = "PhysX inference example for Ferdinand's Unitree Go2 4L velocity policy"
+category = "Examples"
+keywords = ["go2", "unitree", "locomotion", "policy", "physx"]
+
+[dependencies]
+"isaacsim.core.experimental.prims" = {}
+"isaacsim.core.experimental.utils" = {}
+"isaacsim.core.simulation_manager" = {}
+"isaacsim.core.utils" = {}
+"isaacsim.examples.interactive" = {}
+"isaacsim.examples.browser" = {}
+"isaacsim.storage.native" = {}
+"omni.physics.tensors" = {}
+
+[[python.module]]
+name = "ferdinand.go2_walking"
+path = "python"
+
+[[python.module]]
+name = "ferdinand.go2_walking.tests"
+path = "python"
+public = false
+
+[[test]]
+name = "physx"
+timeout = 900
+pythonTests.include = [
+    "ferdinand.go2_walking.tests.test_go2*",
+]
+args = [
+    "--enable",
+    "omni.kit.loop-isaac",
+    "--reset-user",
+    "--vulkan",
+    "--/app/asyncRendering=0",
+    "--/app/fastShutdown=1",
+    "--/app/file/ignoreUnsavedStage=1",
+    "--/app/settings/persistent=0",
+    "--/app/useFabricSceneDelegate=true",
+]
