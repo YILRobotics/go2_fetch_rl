@@ -27,7 +27,7 @@ from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
 
 SIM_DT = 0.005
 GOAL_XY = (0.0, 0.0)
-GOAL_RADIUS_M = 0.2
+GOAL_RADIUS_M = 0.1
 # Base frame axes used by this env are +x forward and +y left.
 # Camera annotation used +y right, so we negate y when converting points.
 CUBE_CAMERA_REGION_POLYGON_XY_BASE = (
@@ -37,11 +37,11 @@ CUBE_CAMERA_REGION_POLYGON_XY_BASE = (
     (0.7, -0.45), # far right corner
 )
 
-HIGH_LEVEL_POLICY_HZ = 15.0
+HIGH_LEVEL_POLICY_HZ = 10.0
 
 CMD_INIT_LIN_VEL_ABS = 0.1 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.1
-CMD_LIMIT_LIN_VEL_X_ABS = 0.6 # Final limit
+CMD_LIMIT_LIN_VEL_X_ABS = 0.7 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.4
 CMD_LIMIT_ANG_VEL_Z_ABS = 0.8
 
@@ -54,7 +54,7 @@ OBS_CORRUPTION_CURRICULUM_STEPS = 10000
 SUCCESS_CUBE_SPEED_THRESHOLD = 0.05
 SUCCESS_HOLD_TIME_S = 0.6
 SUCCESS_CUBE_IN_GOAL_ADDITIONAL_MARGIN = 0.05
-SUCCESS_ROBOT_SPEED_THRESHOLD = 0.15
+SUCCESS_ROBOT_SPEED_THRESHOLD = 0.2
 
 CUBE_POS_OBS_NOISE_STD = 0.08 # m
 CUBE_VEL_OBS_NOISE_STD = 0.15 # m/s
@@ -355,7 +355,7 @@ class EventCfg:
         mode="prestartup",
         params={
             "asset_cfg": SceneEntityCfg("cube"),
-            "scale_range": (1.0, 2.0),
+            "scale_range": (1.0, 2.35),
         },
     )
 
@@ -842,7 +842,7 @@ class RewardsCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "goal_xy": GOAL_XY,
             "goal_radius": GOAL_RADIUS_M,
-            "margin": 0.25, # robot radius from base
+            "margin": 0.22, # robot radius from base
             "transition_steps": TRANSITION_STEPS,
             "start_offset_steps": 0,
         },
