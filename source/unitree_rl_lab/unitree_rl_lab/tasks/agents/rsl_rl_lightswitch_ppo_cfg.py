@@ -8,8 +8,8 @@ from .rsl_rl_ppo_cfg import BasePPORunnerCfg
 @configclass
 class LightSwitchPPORunnerCfg(BasePPORunnerCfg):
     num_steps_per_env = 32
-    max_iterations = 10000
-    save_interval = 1000
+    max_iterations = 2500
+    save_interval = 500
     experiment_name = "unitree_go2_lightswitch_4l"
 
     actor = {
