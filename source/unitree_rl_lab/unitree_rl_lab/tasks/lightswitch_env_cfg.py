@@ -27,18 +27,23 @@ SIM_DT = 0.005
 DECIMATION = 4
 
 SWITCH_CENTER_XY = (0.45, 0.0)
-SWITCH_HEIGHT_RANGE = (0.8, 1.1)
+SWITCH_X_RANGE = (0.42, 0.48)
+SWITCH_Y_RANGE = (-0.04, 0.04)
+SWITCH_HEIGHT_RANGE = (0.72, 0.78)
 SWITCH_YAW_RAD = math.pi * 0.5
 WALL_X_OFFSET = 0.036
 
 # Start closer to the switch so approach is easier in early curriculum.
-ROBOT_FORWARD_RANGE = (0.15, 0.35)
-ROBOT_LATERAL_RANGE = (-0.2, 0.2)
+ROBOT_FORWARD_RANGE = (0.18, 0.30)
+ROBOT_LATERAL_RANGE = (-0.10, 0.10)
 
 CURR_LEG_START_STEP = 0
-CURR_TOUCH_START_STEP = 0
-CURR_PUSH_START_STEP = 100
-CURR_RAMP_STEPS = 4_000 # general amout of steps to ramp up until full reward
+CURR_TOUCH_START_STEP = 1_000
+CURR_PUSH_START_STEP = 3_000
+CURR_APPROACH_END_STEP = 6_000
+CURR_LEG_RAMP_STEPS = 1
+CURR_TOUCH_RAMP_STEPS = 2_000
+CURR_PUSH_RAMP_STEPS = 3_000
 
 
 LIGHTSWITCH_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
@@ -129,7 +134,9 @@ class EventCfg:
         mode="prestartup",
         params={
             "switch_center_xy": SWITCH_CENTER_XY,
-            "switch_default_height": 1.0,
+            "switch_x_range": SWITCH_X_RANGE,
+            "switch_y_range": SWITCH_Y_RANGE,
+            "switch_default_height": 0.75,
             "switch_height_range": SWITCH_HEIGHT_RANGE,
             "switch_yaw": SWITCH_YAW_RAD,
         },
@@ -140,13 +147,12 @@ class EventCfg:
         mode="reset",
         params={
             "robot_cfg": SceneEntityCfg("robot"),
-            "switch_center_xy": SWITCH_CENTER_XY,
             "switch_height_range": SWITCH_HEIGHT_RANGE,
             "switch_yaw": SWITCH_YAW_RAD,
             "wall_x_offset": WALL_X_OFFSET,
             "robot_forward_range": ROBOT_FORWARD_RANGE,
             "robot_lateral_range": ROBOT_LATERAL_RANGE,
-            "robot_yaw_range": (-0.2, 0.2),
+            "robot_yaw_range": (-0.12, 0.12),
             "robot_velocity_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),
@@ -233,7 +239,12 @@ class ObservationsCfg:
             noise=Unoise(n_min=-1.5, n_max=1.5),
         )
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
-        switch_center_pos = ObsTerm(func=lightswitch_mdp.switch_center_position_local, clip=(-5.0, 5.0))
+        switch_center_pos = ObsTerm(
+            func=lightswitch_mdp.switch_center_position_robot_frame,
+            clip=(-2.0, 2.0),
+            params={"robot_cfg": SceneEntityCfg("robot")},
+        )
+        requested_side = ObsTerm(func=lightswitch_mdp.requested_switch_side, clip=(-1.0, 1.0))
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -256,12 +267,19 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
         joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01, clip=(-100, 100))
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
-        switch_center_pos = ObsTerm(func=lightswitch_mdp.switch_center_position_local, clip=(-5.0, 5.0))
+        switch_center_pos = ObsTerm(
+            func=lightswitch_mdp.switch_center_position_robot_frame,
+            clip=(-2.0, 2.0),
+            params={"robot_cfg": SceneEntityCfg("robot")},
+        )
+        requested_side = ObsTerm(func=lightswitch_mdp.requested_switch_side, clip=(-1.0, 1.0))
+        switch_state = ObsTerm(func=lightswitch_mdp.privileged_switch_state, clip=(-20.0, 20.0))
         switch_contact = ObsTerm(
             func=lightswitch_mdp.switch_contact_proxy_obs,
             clip=(0.0, 1.0),
             params={
                 "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
             },
         )
 
@@ -277,8 +295,20 @@ class RewardsCfg:
     # Stage 1: stand and stabilize.
     stability = RewTerm(
         func=lightswitch_mdp.stability_reward,
-        weight=3.0,
+        weight=0.1,
         params={"robot_cfg": SceneEntityCfg("robot")},
+    )
+
+    base_staging_progress = RewTerm(
+        func=lightswitch_mdp.base_to_switch_staging_progress_reward,
+        weight=8.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "desired_distance": 0.22,
+            "start_step": CURR_LEG_START_STEP,
+            "end_step": CURR_APPROACH_END_STEP,
+            "ramp_steps": CURR_LEG_RAMP_STEPS,
+        },
     )
 
     # Stage 2: approach with left leg.
@@ -288,8 +318,8 @@ class RewardsCfg:
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
             "start_step": CURR_LEG_START_STEP,
-            "end_step": CURR_TOUCH_START_STEP,
-            "ramp_steps": CURR_RAMP_STEPS,
+            "end_step": CURR_APPROACH_END_STEP,
+            "ramp_steps": CURR_LEG_RAMP_STEPS,
         },
     )
 
@@ -299,9 +329,10 @@ class RewardsCfg:
         weight=30.0,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
             "start_step": CURR_TOUCH_START_STEP,
             "end_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_RAMP_STEPS,
+            "ramp_steps": CURR_TOUCH_RAMP_STEPS,
         },
     )
 
@@ -311,18 +342,20 @@ class RewardsCfg:
         weight=5.5,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
             "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_RAMP_STEPS,
+            "ramp_steps": CURR_PUSH_RAMP_STEPS,
         },
     )
 
     switch_toggle_success = RewTerm(
         func=lightswitch_mdp.switch_toggle_success_reward,
-        weight=70.0,
+        weight=60.0,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
             "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_RAMP_STEPS,
+            "ramp_steps": CURR_PUSH_RAMP_STEPS,
         },
     )
 
@@ -333,7 +366,19 @@ class RewardsCfg:
             "robot_cfg": SceneEntityCfg("robot"),
             "vel_std": 0.08,
             "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_RAMP_STEPS,
+            "ramp_steps": CURR_PUSH_RAMP_STEPS,
+        },
+    )
+
+    correct_finish = RewTerm(
+        func=lightswitch_mdp.correct_finish_reward,
+        weight=150.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
+            "robot_speed_threshold": 0.10,
+            "hold_time_s": 0.8,
         },
     )
 
@@ -342,8 +387,9 @@ class RewardsCfg:
         weight=-1.2,
         params={
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
             "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_RAMP_STEPS,
+            "ramp_steps": CURR_PUSH_RAMP_STEPS,
         },
     )
 
@@ -364,8 +410,9 @@ class TerminationsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "robot_speed_threshold": 0.12,
-            "hold_time_s": 0.6,
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
+            "robot_speed_threshold": 0.10,
+            "hold_time_s": 0.8,
         },
     )
 
@@ -385,15 +432,15 @@ class CurriculumCfg:
     common_step_counter = CurrTerm(func=lightswitch_mdp.curriculum_common_step_counter, params={})
     leg_stage_alpha = CurrTerm(
         func=lightswitch_mdp.curriculum_stage_alpha,
-        params={"start_step": CURR_LEG_START_STEP, "ramp_steps": CURR_RAMP_STEPS},
+        params={"start_step": CURR_LEG_START_STEP, "ramp_steps": CURR_LEG_RAMP_STEPS},
     )
     touch_stage_alpha = CurrTerm(
         func=lightswitch_mdp.curriculum_stage_alpha,
-        params={"start_step": CURR_TOUCH_START_STEP, "ramp_steps": CURR_RAMP_STEPS},
+        params={"start_step": CURR_TOUCH_START_STEP, "ramp_steps": CURR_TOUCH_RAMP_STEPS},
     )
     push_stage_alpha = CurrTerm(
         func=lightswitch_mdp.curriculum_stage_alpha,
-        params={"start_step": CURR_PUSH_START_STEP, "ramp_steps": CURR_RAMP_STEPS},
+        params={"start_step": CURR_PUSH_START_STEP, "ramp_steps": CURR_PUSH_RAMP_STEPS},
     )
 
 

@@ -9,7 +9,13 @@ from pxr import Gf, PhysxSchema, Sdf, UsdGeom, UsdPhysics
 import isaaclab.utils.math as math_utils
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import ContactSensor
 from isaaclab.sim.utils.stage import get_current_stage
+
+try:
+    from isaaclab.utils.math import quat_apply_inverse
+except ImportError:
+    from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -93,6 +99,7 @@ def _ensure_switch_buffers(env: ManagerBasedRLEnv):
         env._ls_correct_touch = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
         env._ls_wrong_touch = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
         env._ls_toggle_trigger = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._ls_press_in_progress = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
         env._ls_joint_pos_deg = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
         env._ls_joint_vel_deg_s = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
         env._ls_snap_boost_time_left_s = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
@@ -289,7 +296,7 @@ def _cache_switch_handles_for_env(env: ManagerBasedRLEnv, env_id: int, switch_ro
 def _set_switch_root_wall_transforms_for_envs(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
-    switch_center_w: torch.Tensor,
+    switch_center_local: torch.Tensor,
     switch_yaw: float,
     wall_x_offset: float = 0.036,
 ):
@@ -302,7 +309,7 @@ def _set_switch_root_wall_transforms_for_envs(
     quat_wxyz = (q_w, 0.0, 0.0, q_z)
 
     env_ids_cpu = env_ids.to(device="cpu", dtype=torch.long).tolist()
-    centers_cpu = switch_center_w.to(device="cpu")
+    centers_cpu = switch_center_local.to(device="cpu")
     for local_i, env_i in enumerate(env_ids_cpu):
         cx = float(centers_cpu[local_i, 0].item())
         cy = float(centers_cpu[local_i, 1].item())
@@ -325,6 +332,8 @@ def setup_lightswitch_stage(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor | slice | list[int] | None,
     switch_center_xy: tuple[float, float] = (0.45, 0.0),
+    switch_x_range: tuple[float, float] = (0.42, 0.48),
+    switch_y_range: tuple[float, float] = (-0.04, 0.04),
     switch_default_height: float = 1.0,
     switch_height_range: tuple[float, float] = (0.8, 1.1),
     switch_yaw: float = math.pi * 0.5,
@@ -390,9 +399,17 @@ def setup_lightswitch_stage(
 
         _cache_switch_handles_for_env(env, env_i, switch_root_path)
 
+    missing_ids = env_ids[~env._ls_switch_ready[env_ids]]
+    if missing_ids.numel() > 0:
+        raise RuntimeError(f"Light-switch setup failed for environment IDs: {missing_ids.cpu().tolist()}")
+
     env_origins_xy = _scene_env_origins_xy(env)[env_ids]
-    center_x = env_origins_xy[:, 0] + float(switch_center_xy[0])
-    center_y = env_origins_xy[:, 1] + float(switch_center_xy[1])
+    local_x = math_utils.sample_uniform(
+        float(switch_x_range[0]), float(switch_x_range[1]), (env_ids.shape[0],), device=env.device
+    )
+    local_y = math_utils.sample_uniform(
+        float(switch_y_range[0]), float(switch_y_range[1]), (env_ids.shape[0],), device=env.device
+    )
     center_z = math_utils.sample_uniform(
         float(switch_height_range[0]),
         float(switch_height_range[1]),
@@ -400,20 +417,14 @@ def setup_lightswitch_stage(
         device=env.device,
     )
 
-    switch_center_w = torch.stack((center_x, center_y, center_z), dim=1)
+    switch_center_local = torch.stack((local_x, local_y, center_z), dim=1)
+    switch_center_w = torch.stack((env_origins_xy[:, 0] + local_x, env_origins_xy[:, 1] + local_y, center_z), dim=1)
     env._ls_switch_center_w[env_ids] = switch_center_w
-    env._ls_switch_center_local[env_ids] = torch.stack(
-        (
-            torch.full((env_ids.shape[0],), float(switch_center_xy[0]), device=env.device),
-            torch.full((env_ids.shape[0],), float(switch_center_xy[1]), device=env.device),
-            center_z,
-        ),
-        dim=1,
-    )
+    env._ls_switch_center_local[env_ids] = switch_center_local
     _set_switch_root_wall_transforms_for_envs(
         env=env,
         env_ids=env_ids,
-        switch_center_w=switch_center_w,
+        switch_center_local=switch_center_local,
         switch_yaw=switch_yaw,
         wall_x_offset=0.036,
     )
@@ -471,6 +482,7 @@ def _reset_switch_episode_state(
     env._ls_correct_touch[env_ids] = False
     env._ls_wrong_touch[env_ids] = False
     env._ls_toggle_trigger[env_ids] = False
+    env._ls_press_in_progress[env_ids] = False
     env._ls_snap_boost_time_left_s[env_ids] = 0.0
     env._ls_joint_pos_deg[env_ids] = torch.where(
         initial_on,
@@ -489,6 +501,12 @@ def _reset_switch_episode_state(
         env._ls_switch_success_flag[env_ids] = False
     if hasattr(env, "_ls_switch_success_last_step"):
         env._ls_switch_success_last_step = -1
+    if hasattr(env, "_ls_finish_prev"):
+        env._ls_finish_prev[env_ids] = False
+    if hasattr(env, "_ls_finish_flag"):
+        env._ls_finish_flag[env_ids] = False
+    if hasattr(env, "_ls_finish_last_step"):
+        env._ls_finish_last_step = -1
 
 
 def reset_robot_and_lightswitch(
@@ -504,7 +522,7 @@ def reset_robot_and_lightswitch(
     robot_yaw_range: tuple[float, float] = (-0.2, 0.2),
     robot_velocity_range: dict[str, tuple[float, float]] | None = None,
 ):
-    del switch_yaw, wall_x_offset
+    del switch_center_xy, switch_yaw, wall_x_offset, switch_height_range
     if robot_velocity_range is None:
         robot_velocity_range = {
             "x": (0.0, 0.0),
@@ -527,30 +545,12 @@ def reset_robot_and_lightswitch(
     num_resets = int(env_ids.shape[0])
     device = env.device
 
-    env_origins_xy = _scene_env_origins_xy(env)[env_ids]
-    center_x = env_origins_xy[:, 0] + float(switch_center_xy[0])
-    center_y = env_origins_xy[:, 1] + float(switch_center_xy[1])
-
-    # One switch per robot/env: use the physical switch center authored in prestartup.
-    center_z = env._ls_switch_center_w[env_ids, 2].clone()
+    # Use the authoritative physical switch pose sampled during prestartup.
+    center_x = env._ls_switch_center_w[env_ids, 0].clone()
+    center_y = env._ls_switch_center_w[env_ids, 1].clone()
     missing_mask = ~env._ls_switch_ready[env_ids]
     if torch.any(missing_mask):
-        # Fallback only if a switch handle is unexpectedly missing.
-        fallback_z = math_utils.sample_uniform(
-            float(switch_height_range[0]),
-            float(switch_height_range[1]),
-            (int(missing_mask.sum().item()),),
-            device=device,
-        )
-        center_z[missing_mask] = fallback_z
-        missing_env_ids = env_ids[missing_mask]
-        env._ls_switch_center_w[missing_env_ids, 0] = center_x[missing_mask]
-        env._ls_switch_center_w[missing_env_ids, 1] = center_y[missing_mask]
-        env._ls_switch_center_w[missing_env_ids, 2] = fallback_z
-        env._ls_switch_center_local[missing_env_ids, 0] = float(switch_center_xy[0])
-        env._ls_switch_center_local[missing_env_ids, 1] = float(switch_center_xy[1])
-        env._ls_switch_center_local[missing_env_ids, 2] = fallback_z
-        env._ls_switch_ready[missing_env_ids] = True
+        raise RuntimeError(f"Reset requested without switches for environment IDs: {env_ids[missing_mask].cpu().tolist()}")
 
     # Random initial ON/OFF and opposite target side.
     initial_on = torch.rand(num_resets, device=device) > 0.5
@@ -595,6 +595,7 @@ def reset_robot_and_lightswitch(
 def _update_switch_latch_and_interaction(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
     contact_x_threshold: float = 0.10,
     contact_y_threshold: float = 0.08,
     contact_z_threshold: float = 0.08,
@@ -604,8 +605,12 @@ def _update_switch_latch_and_interaction(
     if getattr(env, "_ls_interaction_last_step", -1) == current_step:
         return
 
-    # Contact proxy and side classification.
+    # Spatial classification plus measured foot contact. Position alone cannot toggle.
     foot_pos_w = _left_foot_pos_w(env, foot_cfg=foot_cfg)
+    robot: Articulation = env.scene[foot_cfg.name]
+    sensor: ContactSensor = env.scene[sensor_cfg.name]
+    foot_force = torch.linalg.norm(sensor.data.net_forces_w[:, sensor_cfg.body_ids, :], dim=2).amax(dim=1)
+    foot_vel_x = robot.data.body_lin_vel_w[:, foot_cfg.body_ids, 0].mean(dim=1)
     rel = foot_pos_w - env._ls_switch_center_w
     dx = rel[:, 0]
     dy = rel[:, 1]
@@ -615,25 +620,22 @@ def _update_switch_latch_and_interaction(
         & (torch.abs(dy) <= float(contact_y_threshold))
         & (torch.abs(dz) <= float(contact_z_threshold))
     )
-    top_touch = in_contact_box & (dz > 0.0)
-    bottom_touch = in_contact_box & (dz <= 0.0)
+    physical_contact = in_contact_box & (foot_force >= 2.0)
+    top_touch = physical_contact & (dz > 0.0)
+    bottom_touch = physical_contact & (dz <= 0.0)
     correct_touch = torch.where(env._ls_target_side_sign > 0.0, top_touch, bottom_touch)
-    wrong_touch = in_contact_box & (~correct_touch)
+    wrong_touch = physical_contact & (~correct_touch)
 
-    # GPU-safe latching: toggle state on correct touch, then run internal snap profile.
-    can_toggle = correct_touch & (~env._ls_success)
+    # Require contact while the foot is pressing toward the wall (+world X).
+    can_toggle = correct_touch & (foot_vel_x >= 0.01) & (~env._ls_success)
     if torch.any(can_toggle):
-        env._ls_current_state[can_toggle] = env._ls_target_state[can_toggle]
+        env._ls_press_in_progress[can_toggle] = True
         env._ls_snap_boost_time_left_s[can_toggle] = float(SNAP_BOOST_TIME_S)
 
-    reached_target = (env._ls_current_state == env._ls_target_state) & (~env._ls_success)
-    trigger = _one_shot_bool_trigger(env=env, mask=reached_target, state_prefix="_ls_switch_success")
-    env._ls_success = torch.logical_or(env._ls_success, trigger)
-    env._ls_toggle_trigger = trigger
-
     step_dt = float(_env_step_time_s(env))
+    commanded_state = torch.where(env._ls_press_in_progress, env._ls_target_state, env._ls_current_state)
     target_angle = torch.where(
-        env._ls_current_state,
+        commanded_state,
         torch.full_like(env._ls_joint_pos_deg, float(ON_ANGLE_DEG)),
         torch.full_like(env._ls_joint_pos_deg, float(OFF_ANGLE_DEG)),
     )
@@ -652,7 +654,19 @@ def _update_switch_latch_and_interaction(
     env._ls_joint_vel_deg_s = angle_delta / max(step_dt, 1e-6)
     env._ls_snap_boost_time_left_s = torch.clamp(env._ls_snap_boost_time_left_s - step_dt, min=0.0)
 
-    env._ls_contact = in_contact_box
+    crossed_threshold = torch.where(
+        env._ls_target_state,
+        env._ls_joint_pos_deg >= float(SWITCH_ON_THRESHOLD_DEG),
+        env._ls_joint_pos_deg <= float(SWITCH_OFF_THRESHOLD_DEG),
+    )
+    reached_target = env._ls_press_in_progress & crossed_threshold & (~env._ls_success)
+    env._ls_current_state[reached_target] = env._ls_target_state[reached_target]
+    env._ls_press_in_progress[reached_target] = False
+    trigger = _one_shot_bool_trigger(env=env, mask=reached_target, state_prefix="_ls_switch_success")
+    env._ls_success = torch.logical_or(env._ls_success, trigger)
+    env._ls_toggle_trigger = trigger
+
+    env._ls_contact = physical_contact
     env._ls_correct_touch = correct_touch
     env._ls_wrong_touch = wrong_touch
     env._ls_interaction_last_step = current_step
@@ -663,9 +677,40 @@ def switch_center_position_local(env: ManagerBasedRLEnv) -> torch.Tensor:
     return env._ls_switch_center_local
 
 
+def switch_center_position_robot_frame(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Switch center relative to the base, expressed in the robot body frame."""
+    _ensure_switch_buffers(env)
+    robot: Articulation = env.scene[robot_cfg.name]
+    return quat_apply_inverse(robot.data.root_quat_w, env._ls_switch_center_w - robot.data.root_pos_w)
+
+
+def requested_switch_side(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Requested rocker half: +1 upper/ON, -1 lower/OFF."""
+    _ensure_switch_buffers(env)
+    return env._ls_target_side_sign.unsqueeze(1)
+
+
+def privileged_switch_state(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Simulator-only rocker state for the asymmetric critic."""
+    _ensure_switch_buffers(env)
+    return torch.stack(
+        (
+            env._ls_joint_pos_deg,
+            env._ls_joint_vel_deg_s,
+            env._ls_contact.float(),
+            env._ls_success.float(),
+        ),
+        dim=1,
+    )
+
+
 def switch_contact_proxy_obs(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
     contact_x_threshold: float = 0.10,
     contact_y_threshold: float = 0.08,
     contact_z_threshold: float = 0.08,
@@ -673,6 +718,7 @@ def switch_contact_proxy_obs(
     _update_switch_latch_and_interaction(
         env=env,
         foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
         contact_x_threshold=contact_x_threshold,
         contact_y_threshold=contact_y_threshold,
         contact_z_threshold=contact_z_threshold,
@@ -695,6 +741,33 @@ def stability_reward(
     )
 
 
+def base_to_switch_staging_progress_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    desired_distance: float = 0.22,
+    start_step: int = 0,
+    end_step: int = 6_000,
+    ramp_steps: int = 1,
+) -> torch.Tensor:
+    """Reward bounded progress toward a safe pose directly in front of the switch."""
+    _ensure_switch_buffers(env)
+    robot: Articulation = env.scene[robot_cfg.name]
+    staging_xy = env._ls_switch_center_w[:, :2].clone()
+    staging_xy[:, 0] -= float(desired_distance)
+    dist = torch.linalg.norm(robot.data.root_pos_w[:, :2] - staging_xy, dim=1)
+
+    if not hasattr(env, "_ls_prev_base_stage_dist") or env._ls_prev_base_stage_dist.shape[0] != env.num_envs:
+        env._ls_prev_base_stage_dist = dist.clone()
+
+    reset_mask = env.episode_length_buf == 0
+    env._ls_prev_base_stage_dist[reset_mask] = dist[reset_mask]
+    progress = torch.clamp(env._ls_prev_base_stage_dist - dist, min=0.0, max=0.02)
+    env._ls_prev_base_stage_dist[:] = dist
+
+    alpha = _curriculum_window(env, start_step=start_step, ramp_steps=ramp_steps, end_step=end_step)
+    return alpha * (~env._ls_success).float() * progress
+
+
 def left_leg_to_switch_progress_reward(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
@@ -704,23 +777,28 @@ def left_leg_to_switch_progress_reward(
 ) -> torch.Tensor:
     _ensure_switch_buffers(env)
     foot_pos_w = _left_foot_pos_w(env, foot_cfg=foot_cfg)
-    dist = torch.linalg.norm(foot_pos_w - env._ls_switch_center_w, dim=1)
+    target_pos_w = env._ls_switch_center_w.clone()
+    target_pos_w[:, 2] += 0.012 * env._ls_target_side_sign
+    dist = torch.linalg.norm(foot_pos_w - target_pos_w, dim=1)
 
     if not hasattr(env, "_ls_prev_leg_dist") or env._ls_prev_leg_dist.shape[0] != env.num_envs:
         env._ls_prev_leg_dist = dist.clone()
 
     reset_mask = env.episode_length_buf == 0
     env._ls_prev_leg_dist[reset_mask] = dist[reset_mask]
-    progress = env._ls_prev_leg_dist - dist
+    progress = torch.clamp(env._ls_prev_leg_dist - dist, min=0.0, max=0.02)
     env._ls_prev_leg_dist[:] = dist
 
     alpha = _curriculum_window(env, start_step=start_step, ramp_steps=ramp_steps, end_step=end_step)
-    return alpha * (~env._ls_success).float() * progress
+    # Broad early basin: the nominal foot starts far below a 0.72--0.78 m switch.
+    proximity = torch.exp(-torch.square(dist / 0.45))
+    return alpha * (~env._ls_success).float() * (progress + 0.10 * proximity)
 
 
 def switch_touch_reward(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
     start_step: int = 60_000,
     end_step: int = 100_000,
     ramp_steps: int = 20_000,
@@ -731,6 +809,7 @@ def switch_touch_reward(
     _update_switch_latch_and_interaction(
         env=env,
         foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
         contact_x_threshold=contact_x_threshold,
         contact_y_threshold=contact_y_threshold,
         contact_z_threshold=contact_z_threshold,
@@ -742,6 +821,7 @@ def switch_touch_reward(
 def correct_side_touch_reward(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
     start_step: int = 100_000,
     ramp_steps: int = 20_000,
     contact_x_threshold: float = 0.10,
@@ -751,6 +831,7 @@ def correct_side_touch_reward(
     _update_switch_latch_and_interaction(
         env=env,
         foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
         contact_x_threshold=contact_x_threshold,
         contact_y_threshold=contact_y_threshold,
         contact_z_threshold=contact_z_threshold,
@@ -762,6 +843,7 @@ def correct_side_touch_reward(
 def wrong_side_touch_penalty(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
     start_step: int = 100_000,
     ramp_steps: int = 20_000,
     contact_x_threshold: float = 0.10,
@@ -771,6 +853,7 @@ def wrong_side_touch_penalty(
     _update_switch_latch_and_interaction(
         env=env,
         foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
         contact_x_threshold=contact_x_threshold,
         contact_y_threshold=contact_y_threshold,
         contact_z_threshold=contact_z_threshold,
@@ -782,6 +865,7 @@ def wrong_side_touch_penalty(
 def switch_toggle_success_reward(
     env: ManagerBasedRLEnv,
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
     start_step: int = 100_000,
     ramp_steps: int = 20_000,
     contact_x_threshold: float = 0.10,
@@ -791,6 +875,7 @@ def switch_toggle_success_reward(
     _update_switch_latch_and_interaction(
         env=env,
         foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
         contact_x_threshold=contact_x_threshold,
         contact_y_threshold=contact_y_threshold,
         contact_z_threshold=contact_z_threshold,
@@ -818,15 +903,41 @@ def lightswitch_goal_reached(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    robot_speed_threshold: float = 0.12,
-    hold_time_s: float = 0.6,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
+    robot_speed_threshold: float = 0.10,
+    hold_time_s: float = 0.8,
 ):
-    _update_switch_latch_and_interaction(env=env, foot_cfg=foot_cfg)
+    return _finished_stable_mask(
+        env=env,
+        robot_cfg=robot_cfg,
+        foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
+        robot_speed_threshold=robot_speed_threshold,
+        hold_time_s=hold_time_s,
+    )
+
+
+def _finished_stable_mask(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    robot_speed_threshold: float,
+    hold_time_s: float,
+) -> torch.Tensor:
+    _update_switch_latch_and_interaction(env=env, foot_cfg=foot_cfg, sensor_cfg=sensor_cfg)
     _ensure_switch_buffers(env)
 
     robot: Articulation = env.scene[robot_cfg.name]
     planar_speed = torch.linalg.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
-    success_and_slow = env._ls_success & (planar_speed <= float(robot_speed_threshold))
+    angular_speed = torch.linalg.norm(robot.data.root_ang_vel_w, dim=1)
+    tilt = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
+    success_and_stable = (
+        env._ls_success
+        & (planar_speed <= float(robot_speed_threshold))
+        & (angular_speed <= 0.35)
+        & (tilt <= 0.20)
+    )
 
     required_steps = max(1, int(math.ceil(float(hold_time_s) / _env_step_time_s(env))))
     current_step = int(env.common_step_counter)
@@ -834,10 +945,30 @@ def lightswitch_goal_reached(
         reset_mask = env.episode_length_buf == 0
         env._ls_success_hold_counter[reset_mask] = 0
         env._ls_success_hold_counter = torch.where(
-            success_and_slow,
+            success_and_stable,
             env._ls_success_hold_counter + 1,
             torch.zeros_like(env._ls_success_hold_counter),
         )
         env._ls_success_hold_last_step = current_step
 
     return env._ls_success_hold_counter >= required_steps
+
+
+def correct_finish_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
+    robot_speed_threshold: float = 0.10,
+    hold_time_s: float = 0.8,
+) -> torch.Tensor:
+    """Largest one-shot reward: toggle, recover, and hold a stable stance."""
+    finished = _finished_stable_mask(
+        env=env,
+        robot_cfg=robot_cfg,
+        foot_cfg=foot_cfg,
+        sensor_cfg=sensor_cfg,
+        robot_speed_threshold=robot_speed_threshold,
+        hold_time_s=hold_time_s,
+    )
+    return _one_shot_bool_trigger(env=env, mask=finished, state_prefix="_ls_finish").float()

@@ -27,7 +27,7 @@ from .velocity_4l_env_cfg import RobotEnvCfg as LowLevel4LEnvCfg
 
 SIM_DT = 0.005
 GOAL_XY = (0.0, 0.0)
-GOAL_RADIUS_M = 0.1
+GOAL_RADIUS_M = 0.15
 # Base frame axes used by this env are +x forward and +y left.
 # Camera annotation used +y right, so we negate y when converting points.
 CUBE_CAMERA_REGION_POLYGON_XY_BASE = (
@@ -41,7 +41,7 @@ HIGH_LEVEL_POLICY_HZ = 10.0
 
 CMD_INIT_LIN_VEL_ABS = 0.1 # Initial value
 CMD_INIT_ANG_VEL_ABS = 0.1
-CMD_LIMIT_LIN_VEL_X_ABS = 0.7 # Final limit
+CMD_LIMIT_LIN_VEL_X_ABS = 0.5 # Final limit
 CMD_LIMIT_LIN_VEL_Y_ABS = 0.4
 CMD_LIMIT_ANG_VEL_Z_ABS = 0.8
 
@@ -796,7 +796,7 @@ class RewardsCfg:
     
     goal_exit_penalty = RewTerm(
         func=push_mdp.cube_exit_goal_penalty,
-        weight=-15.0,
+        weight=-20.0,
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "goal_xy": GOAL_XY,
