@@ -1022,7 +1022,7 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
         self.events.floor_friction_per_reset.params["dynamic_friction_range"] = (0.65, 0.65)
         self.commands.base_velocity.debug_vis = True
         self.actions.pre_trained_policy_action.debug_vis = True 
-        small_arrow_scale = (0.3, 0.3, 0.3)
+        small_arrow_scale = (0.28, 0.28, 0.28)
         self.commands.base_velocity.goal_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
         self.commands.base_velocity.current_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
 

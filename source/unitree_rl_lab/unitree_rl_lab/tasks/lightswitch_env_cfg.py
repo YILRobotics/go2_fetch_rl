@@ -56,7 +56,7 @@ def _phase_tracking_params() -> dict:
         "settle_time_s": 0.25,
         "lift_height": 0.30,
         "lift_hold_time_s": 0.06,
-        "jump_base_rise": 0.08,
+        "jump_base_rise": 0.12,
         "land_hold_time_s": 0.50,
     }
 
@@ -318,13 +318,18 @@ class RewardsCfg:
         weight=400.0,
         params=_phase_tracking_params(),
     )
-    front_feet_air = RewTerm(
-        func=lightswitch_mdp.front_feet_air_milestone_reward,
-        weight=100.0,
-        params=_phase_tracking_params(),
-    )
     rear_support_loss = RewTerm(
         func=lightswitch_mdp.rear_support_loss_penalty,
+        weight=-5.0,
+        params=_phase_tracking_params(),
+    )
+    front_foot_excess_speed = RewTerm(
+        func=lightswitch_mdp.front_foot_excess_speed_penalty,
+        weight=-2.0,
+        params=_phase_tracking_params(),
+    )
+    jump_crouch = RewTerm(
+        func=lightswitch_mdp.jump_crouch_penalty,
         weight=-5.0,
         params=_phase_tracking_params(),
     )
@@ -375,8 +380,8 @@ class RewardsCfg:
         params=_phase_tracking_params(),
     )
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.01)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.003)
-    time_penalty = RewTerm(func=mdp.is_alive, weight=-0.05)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
+    time_penalty = RewTerm(func=mdp.is_alive, weight=-0.20)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-8.0)
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-0.02)
 
@@ -407,8 +412,8 @@ class CurriculumCfg:
     behavior_difficulty = CurrTerm(
         func=lightswitch_mdp.curriculum_behavior_difficulty,
         params={
-            "jump_rise_start": 0.03,
-            "jump_rise_target": 0.08,
+            "jump_rise_start": 0.08,
+            "jump_rise_target": 0.12,
             "success_rate_start": 0.40,
             "success_rate_full": 0.70,
             "ema_rate": 0.10,

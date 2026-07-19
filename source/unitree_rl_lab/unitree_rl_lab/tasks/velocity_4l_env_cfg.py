@@ -512,6 +512,10 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
         self.curriculum.lin_vel_cmd_levels = None      
 
+        small_arrow_scale = (0.28, 0.28, 0.28)
+        self.commands.base_velocity.goal_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
+        self.commands.base_velocity.current_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
+
         # Set cmd vel manually for play
         # self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(
         #     lin_vel_x=(0.0, 0.0),

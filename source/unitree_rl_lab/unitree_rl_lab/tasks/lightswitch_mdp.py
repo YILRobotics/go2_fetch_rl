@@ -81,8 +81,8 @@ def curriculum_phase_fraction(env, env_ids, phase: int):
 def curriculum_behavior_difficulty(
     env,
     env_ids,
-    jump_rise_start: float = 0.03,
-    jump_rise_target: float = 0.08,
+    jump_rise_start: float = 0.08,
+    jump_rise_target: float = 0.12,
     success_rate_start: float = 0.40,
     success_rate_full: float = 0.70,
     ema_rate: float = 0.10,
@@ -137,13 +137,14 @@ def _ensure_switch_buffers(env: ManagerBasedRLEnv):
         env._ls_settle_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
         env._ls_lift_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
         env._ls_land_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
+        env._ls_jump_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
         env._ls_settled_base_z = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
         env._ls_front_air_seen = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
         env._ls_front_air_trigger = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
         env._ls_rear_ground = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
         env._ls_phase_last_step = -1
         env._ls_jump_success_ema = torch.tensor(0.0, device=env.device)
-        env._ls_adaptive_jump_rise = torch.tensor(0.03, device=env.device)
+        env._ls_adaptive_jump_rise = torch.tensor(0.08, device=env.device)
 
         env._ls_joint_pos_attrs = [None] * env.num_envs
         env._ls_joint_vel_attrs = [None] * env.num_envs
@@ -539,6 +540,7 @@ def _reset_switch_episode_state(
     env._ls_settle_hold_counter[env_ids] = 0
     env._ls_lift_hold_counter[env_ids] = 0
     env._ls_land_hold_counter[env_ids] = 0
+    env._ls_jump_hold_counter[env_ids] = 0
     env._ls_settled_base_z[env_ids] = 0.0
     env._ls_front_air_seen[env_ids] = False
     env._ls_front_air_trigger[env_ids] = False
@@ -660,7 +662,6 @@ def _update_switch_latch_and_interaction(
     robot: Articulation = env.scene[foot_cfg.name]
     sensor: ContactSensor = env.scene[sensor_cfg.name]
     foot_force = torch.linalg.norm(sensor.data.net_forces_w[:, sensor_cfg.body_ids, :], dim=2).amax(dim=1)
-    foot_vel_x = robot.data.body_lin_vel_w[:, foot_cfg.body_ids, 0].mean(dim=1)
     rel = foot_pos_w - env._ls_switch_center_w
     dx = rel[:, 0]
     dy = rel[:, 1]
@@ -679,7 +680,9 @@ def _update_switch_latch_and_interaction(
     # V1 accepts either rocker half, but only after the ordered jump milestone.
     # The touched half chooses the visual rocker direction; it is not a task command.
     valid_phase = (env._ls_phase == PHASE_PRESS) & env._ls_rear_ground
-    can_press = physical_contact & (foot_vel_x >= 0.01) & valid_phase & (~env._ls_success)
+    # Contact force and location already prove a real press.  Requiring positive
+    # X velocity on the exact contact frame made valid impacts get discarded.
+    can_press = physical_contact & valid_phase & (~env._ls_success)
     if torch.any(can_press):
         touched_state = top_touch[can_press]
         env._ls_target_state[can_press] = touched_state
@@ -813,7 +816,7 @@ def _update_behavior_phase(
     settle_time_s: float = 0.25,
     lift_height: float = 0.30,
     lift_hold_time_s: float = 0.10,
-    jump_base_rise: float = 0.08,
+    jump_base_rise: float = 0.12,
     land_hold_time_s: float = 0.50,
 ):
     """Advance each environment through stand, jump, press, and land exactly once."""
@@ -878,7 +881,14 @@ def _update_behavior_phase(
     env._ls_front_air_trigger[new_front_air] = True
     env._ls_front_air_seen = env._ls_front_air_seen | (jump_mask & supported_front_air)
     jump_threshold = torch.clamp(env._ls_adaptive_jump_rise, max=float(jump_base_rise))
-    enter_press = jump_mask & supported_front_air & (base_rise >= jump_threshold)
+    valid_supported_jump = jump_mask & supported_front_air & (base_rise >= jump_threshold)
+    env._ls_jump_hold_counter = torch.where(
+        valid_supported_jump,
+        env._ls_jump_hold_counter + 1,
+        torch.where(jump_mask, torch.zeros_like(env._ls_jump_hold_counter), env._ls_jump_hold_counter),
+    )
+    jump_hold_steps = max(1, int(math.ceil(0.12 / dt)))
+    enter_press = jump_mask & (env._ls_jump_hold_counter >= jump_hold_steps)
     env._ls_phase[enter_press] = PHASE_PRESS
     env._ls_phase_entered[enter_press] = PHASE_PRESS
 
@@ -1009,6 +1019,73 @@ def rear_support_loss_penalty(
     rear_contacts = _feet_grounded(env, other_feet_sensor_cfg).float().sum(dim=1)
     active = (env._ls_phase == PHASE_JUMP) | (env._ls_phase == PHASE_PRESS)
     return active.float() * (2.0 - rear_contacts)
+
+
+def front_foot_excess_speed_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    """Suppress fast front-foot flicking while leaving room for one deliberate reach."""
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    robot: Articulation = env.scene[robot_cfg.name]
+    if not hasattr(env, "_ls_front_foot_body_ids"):
+        env._ls_front_foot_body_ids = robot.find_bodies(
+            ["FL_foot.*", "FR_foot.*"], preserve_order=True
+        )[0]
+    speeds = torch.linalg.norm(robot.data.body_lin_vel_w[:, env._ls_front_foot_body_ids, :], dim=2)
+    jump_penalty = torch.square(torch.clamp(speeds - 1.0, min=0.0)).sum(dim=1)
+    press_fl = torch.square(torch.clamp(speeds[:, 0] - 1.0, min=0.0))
+    press_fr = 2.0 * torch.square(torch.clamp(speeds[:, 1] - 0.35, min=0.0))
+    return torch.where(
+        env._ls_phase == PHASE_JUMP,
+        jump_penalty,
+        torch.where(env._ls_phase == PHASE_PRESS, press_fl + press_fr, torch.zeros_like(jump_penalty)),
+    )
+
+
+def jump_crouch_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    """Allow a small preload crouch, but prevent staying low on the rear legs."""
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    robot: Articulation = env.scene[robot_cfg.name]
+    excessive_drop = torch.clamp(
+        (env._ls_settled_base_z - robot.data.root_pos_w[:, 2] - 0.03) / 0.10,
+        min=0.0,
+        max=2.0,
+    )
+    return (env._ls_phase == PHASE_JUMP).float() * torch.square(excessive_drop)
 
 
 def press_approach_progress_reward(

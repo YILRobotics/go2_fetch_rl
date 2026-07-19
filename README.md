@@ -162,6 +162,9 @@ python scripts/rsl_rl/play.py \
   --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-07-07_10-07-42_ff_5_19/model_2499.pt
 ```
 
+
+Make good videos:
+```bash
 python scripts/rsl_rl/play.py \
     --task Unitree-Go2-PushCube-4L \
     --num_envs 16 \
@@ -197,22 +200,19 @@ python scripts/rsl_rl/play.py \
 
 python scripts/rsl_rl/play.py \
     --task Unitree-Go2-Velocity-4L \
-    --num_envs 16 \
+    --num_envs 1024 \
     --terrain_rows 2 \
     --terrain_cols 16 \
-    --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/
-    unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/model_6999.pt \
+    --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/model_6999.pt \
     --camera_mode low_chase \
     --chase_rotation off \
-    --camera_eye -5 5 2.8 \
-    --camera_lookat 0 0 0 \
+    --camera_eye 5 5 2.8 \
+    --camera_lookat 0 0 -1.5 \
     --video \
-    --video_length 350 \
+    --video_length 600 \
     --headless \
     --seed 42
-
-
-
+```
 
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.
 
