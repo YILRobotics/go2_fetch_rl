@@ -99,25 +99,60 @@ class Go2WalkingExample(BaseSample):
             UsdShade.MaterialBindingAPI.Apply(ground).Bind(material)
 
     @staticmethod
-    def _add_softbox_light() -> None:
-        """Add a large area light aimed at the robot from 30 degrees off vertical."""
+    def _add_cinematic_lighting() -> None:
+        """Add a warm soft key, cool rim, and subdued ambient fill."""
         stage = omni.usd.get_context().get_stage()
-        light = UsdLux.RectLight.Define(stage, "/World/Go2Softbox")
-        light.CreateWidthAttr(8.0)
-        light.CreateHeightAttr(8.0)
-        light.CreateIntensityAttr(5000.0)
-        light.CreateExposureAttr(2.0)
-        light.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.9))
-        light.CreateNormalizeAttr(True)
 
-        position = Gf.Vec3d(-4.0, -4.0, 6.0)
-        target = Gf.Vec3d(2.0, 0.0, 0.5)
-        orientation = Gf.Matrix4d().SetLookAt(position, target, Gf.Vec3d(0.0, 0.0, 1.0))
-        orientation = orientation.GetInverse().ExtractRotation().GetQuat()
-        xform = UsdGeom.Xformable(light.GetPrim())
-        xform.ClearXformOpOrder()
-        xform.AddTranslateOp().Set(position)
-        xform.AddOrientOp().Set(Gf.Quatf(orientation))
+        def add_rect_light(
+            path: str,
+            position: Gf.Vec3d,
+            target: Gf.Vec3d,
+            color: Gf.Vec3f,
+            intensity: float,
+            exposure: float,
+            size: tuple[float, float],
+        ) -> None:
+            light = UsdLux.RectLight.Define(stage, path)
+            light.CreateWidthAttr(size[0])
+            light.CreateHeightAttr(size[1])
+            light.CreateIntensityAttr(intensity)
+            light.CreateExposureAttr(exposure)
+            light.CreateColorAttr(color)
+            light.CreateNormalizeAttr(True)
+
+            orientation = Gf.Matrix4d().SetLookAt(position, target, Gf.Vec3d(0.0, 0.0, 1.0))
+            orientation = orientation.GetInverse().ExtractRotation().GetQuat()
+            xform = UsdGeom.Xformable(light.GetPrim())
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(position)
+            xform.AddOrientOp().Set(Gf.Quatf(orientation))
+
+        # Large warm source from camera-left: the main modelling light.
+        add_rect_light(
+            path="/World/Go2CinematicKey",
+            position=Gf.Vec3d(-4.0, -5.0, 6.0),
+            target=Gf.Vec3d(1.0, 0.0, 0.5),
+            color=Gf.Vec3f(1.0, 0.82, 0.68),
+            intensity=3500.0,
+            exposure=1.0,
+            size=(7.0, 7.0),
+        )
+
+        # Cooler back light outlines the robot against the environment.
+        add_rect_light(
+            path="/World/Go2CinematicRim",
+            position=Gf.Vec3d(4.0, 4.0, 3.5),
+            target=Gf.Vec3d(0.5, 0.0, 0.45),
+            color=Gf.Vec3f(0.55, 0.70, 1.0),
+            intensity=1800.0,
+            exposure=0.5,
+            size=(4.0, 4.0),
+        )
+
+        ambient = UsdLux.DomeLight.Define(stage, "/World/Go2CinematicAmbient")
+        ambient.CreateIntensityAttr(250.0)
+        ambient.CreateExposureAttr(0.0)
+        ambient.CreateColorAttr(Gf.Vec3f(0.58, 0.68, 0.9))
 
     @staticmethod
     def _add_obstacles() -> None:
@@ -182,7 +217,7 @@ class Go2WalkingExample(BaseSample):
             path="/World/ground",
         )
         self._apply_ground_material()
-        self._add_softbox_light()
+        self._add_cinematic_lighting()
         self._add_obstacles()
         self.go2 = Go2VelocityPolicy(prim_path="/World/Go2", position=(0.0, 0.0, 0.5))
         UsdGeom.Camera.Define(omni.usd.get_context().get_stage(), self.CAMERA_PATH)

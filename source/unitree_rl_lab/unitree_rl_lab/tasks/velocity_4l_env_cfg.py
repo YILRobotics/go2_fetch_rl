@@ -117,8 +117,18 @@ class RobotSceneCfg(InteractiveSceneCfg):
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
-            intensity=750.0,
+            intensity=400.0,
             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
+
+    cinematic_key_light = AssetBaseCfg(
+        prim_path="/World/cinematicKeyLight",
+        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.816, 0.453, -0.179, 0.311)),
+        spawn=sim_utils.DistantLightCfg(
+            color=(1.0, 0.82, 0.68),
+            intensity=1800.0,
+            angle=4.0,
         ),
     )
 

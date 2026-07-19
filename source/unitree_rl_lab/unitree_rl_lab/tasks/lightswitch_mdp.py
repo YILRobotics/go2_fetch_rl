@@ -29,6 +29,15 @@ SWITCH_OFF_THRESHOLD_DEG = -1.0
 SNAP_BOOST_VEL_DEG_S = 60.0
 SNAP_BOOST_TIME_S = 0.10
 
+# Ordered behavior phases.  The policy receives these as a one-hot observation.
+PHASE_STAND = 0
+PHASE_LIFT = 1
+PHASE_JUMP = 2
+PHASE_PRESS = 3
+PHASE_LAND = 4
+PHASE_SUCCESS = 5
+NUM_BEHAVIOR_PHASES = 6
+
 
 def _to_env_ids(env: ManagerBasedRLEnv, env_ids: torch.Tensor | slice | list[int] | None) -> torch.Tensor:
     if env_ids is None:
@@ -57,33 +66,47 @@ def _env_step_time_s(env: ManagerBasedRLEnv) -> float:
     return 1.0
 
 
-def _curriculum_ramp(env: ManagerBasedRLEnv, start_step: int, ramp_steps: int) -> float:
-    if ramp_steps <= 0:
-        return 1.0 if int(env.common_step_counter) >= int(start_step) else 0.0
-    return min(1.0, max(0.0, (float(env.common_step_counter) - float(start_step)) / float(ramp_steps)))
-
-
-def _curriculum_window(
-    env: ManagerBasedRLEnv,
-    start_step: int,
-    ramp_steps: int,
-    end_step: int | None = None,
-) -> float:
-    begin = _curriculum_ramp(env, start_step=start_step, ramp_steps=ramp_steps)
-    if end_step is None:
-        return begin
-    end = _curriculum_ramp(env, start_step=end_step, ramp_steps=ramp_steps)
-    return max(0.0, begin * (1.0 - end))
-
-
 def curriculum_common_step_counter(env, env_ids):
     del env_ids
     return float(env.common_step_counter)
 
 
-def curriculum_stage_alpha(env, env_ids, start_step: int, ramp_steps: int = 20_000):
+def curriculum_phase_fraction(env, env_ids, phase: int):
+    """Fraction of parallel environments currently occupying one behavior phase."""
     del env_ids
-    return _curriculum_ramp(env, start_step=start_step, ramp_steps=ramp_steps)
+    _ensure_switch_buffers(env)
+    return float((env._ls_phase == int(phase)).float().mean().item())
+
+
+def curriculum_behavior_difficulty(
+    env,
+    env_ids,
+    jump_rise_start: float = 0.03,
+    jump_rise_target: float = 0.08,
+    success_rate_start: float = 0.40,
+    success_rate_full: float = 0.70,
+    ema_rate: float = 0.10,
+):
+    """Raise lift/jump thresholds only after recent episodes reliably clear each milestone."""
+    _ensure_switch_buffers(env)
+    ids = _to_env_ids(env, env_ids)
+    completed = env.episode_length_buf[ids] > 0
+    if torch.any(completed):
+        phases = env._ls_phase[ids[completed]]
+        jump_rate = (phases >= PHASE_PRESS).float().mean()
+        rate = float(ema_rate)
+        env._ls_jump_success_ema = (1.0 - rate) * env._ls_jump_success_ema + rate * jump_rate
+
+    denominator = max(float(success_rate_full) - float(success_rate_start), 1e-6)
+    jump_alpha = torch.clamp((env._ls_jump_success_ema - float(success_rate_start)) / denominator, 0.0, 1.0)
+    env._ls_adaptive_jump_rise = float(jump_rise_start) + jump_alpha * (
+        float(jump_rise_target) - float(jump_rise_start)
+    )
+    return {
+        "difficulty": jump_alpha,
+        "jump_success_ema": env._ls_jump_success_ema,
+        "jump_rise": env._ls_adaptive_jump_rise,
+    }
 
 
 def _ensure_switch_buffers(env: ManagerBasedRLEnv):
@@ -104,6 +127,23 @@ def _ensure_switch_buffers(env: ManagerBasedRLEnv):
         env._ls_joint_vel_deg_s = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
         env._ls_snap_boost_time_left_s = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
         env._ls_switch_ready = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+
+        env._ls_phase = torch.full(
+            (env.num_envs,), PHASE_STAND, device=env.device, dtype=torch.long
+        )
+        env._ls_phase_entered = torch.full(
+            (env.num_envs,), -1, device=env.device, dtype=torch.long
+        )
+        env._ls_settle_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
+        env._ls_lift_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
+        env._ls_land_hold_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
+        env._ls_settled_base_z = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
+        env._ls_front_air_seen = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._ls_front_air_trigger = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+        env._ls_rear_ground = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
+        env._ls_phase_last_step = -1
+        env._ls_jump_success_ema = torch.tensor(0.0, device=env.device)
+        env._ls_adaptive_jump_rise = torch.tensor(0.03, device=env.device)
 
         env._ls_joint_pos_attrs = [None] * env.num_envs
         env._ls_joint_vel_attrs = [None] * env.num_envs
@@ -494,6 +534,16 @@ def _reset_switch_episode_state(
     env._ls_interaction_last_step = -1
     env._ls_success_hold_last_step = -1
     env._ls_success_hold_counter[env_ids] = 0
+    env._ls_phase[env_ids] = PHASE_STAND
+    env._ls_phase_entered[env_ids] = -1
+    env._ls_settle_hold_counter[env_ids] = 0
+    env._ls_lift_hold_counter[env_ids] = 0
+    env._ls_land_hold_counter[env_ids] = 0
+    env._ls_settled_base_z[env_ids] = 0.0
+    env._ls_front_air_seen[env_ids] = False
+    env._ls_front_air_trigger[env_ids] = False
+    env._ls_rear_ground[env_ids] = True
+    env._ls_phase_last_step = -1
 
     if hasattr(env, "_ls_switch_success_prev"):
         env._ls_switch_success_prev[env_ids] = False
@@ -626,11 +676,20 @@ def _update_switch_latch_and_interaction(
     correct_touch = torch.where(env._ls_target_side_sign > 0.0, top_touch, bottom_touch)
     wrong_touch = physical_contact & (~correct_touch)
 
-    # Require contact while the foot is pressing toward the wall (+world X).
-    can_toggle = correct_touch & (foot_vel_x >= 0.01) & (~env._ls_success)
-    if torch.any(can_toggle):
-        env._ls_press_in_progress[can_toggle] = True
-        env._ls_snap_boost_time_left_s[can_toggle] = float(SNAP_BOOST_TIME_S)
+    # V1 accepts either rocker half, but only after the ordered jump milestone.
+    # The touched half chooses the visual rocker direction; it is not a task command.
+    valid_phase = (env._ls_phase == PHASE_PRESS) & env._ls_rear_ground
+    can_press = physical_contact & (foot_vel_x >= 0.01) & valid_phase & (~env._ls_success)
+    if torch.any(can_press):
+        touched_state = top_touch[can_press]
+        env._ls_target_state[can_press] = touched_state
+        env._ls_target_side_sign[can_press] = torch.where(
+            touched_state,
+            torch.ones_like(touched_state, dtype=torch.float32),
+            -torch.ones_like(touched_state, dtype=torch.float32),
+        )
+        env._ls_press_in_progress[can_press] = True
+        env._ls_snap_boost_time_left_s[can_press] = float(SNAP_BOOST_TIME_S)
 
     step_dt = float(_env_step_time_s(env))
     commanded_state = torch.where(env._ls_press_in_progress, env._ls_target_state, env._ls_current_state)
@@ -687,12 +746,6 @@ def switch_center_position_robot_frame(
     return quat_apply_inverse(robot.data.root_quat_w, env._ls_switch_center_w - robot.data.root_pos_w)
 
 
-def requested_switch_side(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Requested rocker half: +1 upper/ON, -1 lower/OFF."""
-    _ensure_switch_buffers(env)
-    return env._ls_target_side_sign.unsqueeze(1)
-
-
 def privileged_switch_state(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Simulator-only rocker state for the asymmetric critic."""
     _ensure_switch_buffers(env)
@@ -726,6 +779,374 @@ def switch_contact_proxy_obs(
     return env._ls_contact.float().unsqueeze(1)
 
 
+def behavior_phase_one_hot(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Ordered task phase for the memoryless actor and critic."""
+    _ensure_switch_buffers(env)
+    return torch.nn.functional.one_hot(env._ls_phase, num_classes=NUM_BEHAVIOR_PHASES).float()
+
+
+def _feet_grounded(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    min_vertical_force: float = 1.0,
+) -> torch.Tensor:
+    sensor: ContactSensor = env.scene[sensor_cfg.name]
+    vertical_force = torch.abs(sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2])
+    return vertical_force >= float(min_vertical_force)
+
+
+def _update_behavior_phase(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
+    other_feet_cfg: SceneEntityCfg = SceneEntityCfg(
+        "robot", body_names=["RL_foot.*", "RR_foot.*"]
+    ),
+    foot_sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
+    other_feet_sensor_cfg: SceneEntityCfg = SceneEntityCfg(
+        "contact_forces", body_names=["RL_foot.*", "RR_foot.*"]
+    ),
+    front_feet_sensor_cfg: SceneEntityCfg = SceneEntityCfg(
+        "contact_forces", body_names=["FL_foot.*", "FR_foot.*"]
+    ),
+    all_feet_sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=".*_foot.*"),
+    settle_time_s: float = 0.25,
+    lift_height: float = 0.30,
+    lift_hold_time_s: float = 0.10,
+    jump_base_rise: float = 0.08,
+    land_hold_time_s: float = 0.50,
+):
+    """Advance each environment through stand, jump, press, and land exactly once."""
+    _ensure_switch_buffers(env)
+    current_step = int(env.common_step_counter)
+    if getattr(env, "_ls_phase_last_step", -1) == current_step:
+        return
+
+    robot: Articulation = env.scene[robot_cfg.name]
+    old_phase = env._ls_phase.clone()
+    env._ls_phase_entered.fill_(-1)
+    env._ls_front_air_trigger.fill_(False)
+    dt = _env_step_time_s(env)
+
+    planar_speed = torch.linalg.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
+    vertical_speed = torch.abs(robot.data.root_lin_vel_w[:, 2])
+    angular_speed = torch.linalg.norm(robot.data.root_ang_vel_w, dim=1)
+    tilt = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
+
+    front_air = (~_feet_grounded(env, front_feet_sensor_cfg)).all(dim=1)
+    rear_ground = _feet_grounded(env, other_feet_sensor_cfg).all(dim=1)
+    env._ls_rear_ground = rear_ground
+    all_ground = _feet_grounded(env, all_feet_sensor_cfg).all(dim=1)
+
+    # Presses are accepted only while both rear feet support the robot.
+    _update_switch_latch_and_interaction(env=env, foot_cfg=foot_cfg, sensor_cfg=foot_sensor_cfg)
+
+    # Reset already places the robot in a nominal stance.  This gate only verifies a
+    # short visible settling period; tight force/velocity limits previously trapped
+    # more than 99% of environments in STAND forever.
+    grounded_count = _feet_grounded(env, all_feet_sensor_cfg).sum(dim=1)
+    stable_stand = (
+        (grounded_count >= 3)
+        & (planar_speed <= 0.30)
+        & (vertical_speed <= 0.20)
+        & (angular_speed <= 0.80)
+        & (tilt <= 0.35)
+    )
+    stand_mask = old_phase == PHASE_STAND
+    env._ls_settle_hold_counter = torch.where(
+        stand_mask & stable_stand,
+        env._ls_settle_hold_counter + 1,
+        torch.where(stand_mask, torch.zeros_like(env._ls_settle_hold_counter), env._ls_settle_hold_counter),
+    )
+    settle_steps = max(1, int(math.ceil(float(settle_time_s) / dt)))
+    settle_fallback_steps = max(settle_steps, int(math.ceil(0.50 / dt)))
+    settle_fallback = (env.episode_length_buf >= settle_fallback_steps) & (tilt <= 0.50)
+    enter_jump_from_stand = stand_mask & (
+        (env._ls_settle_hold_counter >= settle_steps) | settle_fallback
+    )
+    if torch.any(enter_jump_from_stand):
+        # Go directly into the jump.  The manipulation leg does not need to be
+        # raised separately before takeoff.
+        env._ls_phase[enter_jump_from_stand] = PHASE_JUMP
+        env._ls_phase_entered[enter_jump_from_stand] = PHASE_JUMP
+        env._ls_settled_base_z[enter_jump_from_stand] = robot.data.root_pos_w[enter_jump_from_stand, 2]
+
+    jump_mask = old_phase == PHASE_JUMP
+    base_rise = robot.data.root_pos_w[:, 2] - env._ls_settled_base_z
+    supported_front_air = front_air & rear_ground
+    new_front_air = jump_mask & supported_front_air & (~env._ls_front_air_seen)
+    env._ls_front_air_trigger[new_front_air] = True
+    env._ls_front_air_seen = env._ls_front_air_seen | (jump_mask & supported_front_air)
+    jump_threshold = torch.clamp(env._ls_adaptive_jump_rise, max=float(jump_base_rise))
+    enter_press = jump_mask & supported_front_air & (base_rise >= jump_threshold)
+    env._ls_phase[enter_press] = PHASE_PRESS
+    env._ls_phase_entered[enter_press] = PHASE_PRESS
+
+    enter_land = (old_phase == PHASE_PRESS) & env._ls_success
+    env._ls_phase[enter_land] = PHASE_LAND
+    env._ls_phase_entered[enter_land] = PHASE_LAND
+
+    base_height_error = torch.abs(robot.data.root_pos_w[:, 2] - env._ls_settled_base_z)
+    stable_landing = (
+        all_ground
+        & (planar_speed <= 0.10)
+        & (vertical_speed <= 0.10)
+        & (angular_speed <= 0.35)
+        & (tilt <= 0.20)
+        & (base_height_error <= 0.10)
+    )
+    land_mask = old_phase == PHASE_LAND
+    env._ls_land_hold_counter = torch.where(
+        land_mask & stable_landing,
+        env._ls_land_hold_counter + 1,
+        torch.where(land_mask, torch.zeros_like(env._ls_land_hold_counter), env._ls_land_hold_counter),
+    )
+    land_steps = max(1, int(math.ceil(float(land_hold_time_s) / dt)))
+    enter_success = land_mask & (env._ls_land_hold_counter >= land_steps)
+    env._ls_phase[enter_success] = PHASE_SUCCESS
+    env._ls_phase_entered[enter_success] = PHASE_SUCCESS
+    env._ls_phase_last_step = current_step
+
+
+def front_feet_air_milestone_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    return env._ls_front_air_trigger.float()
+
+
+def phase_milestone_reward(
+    env: ManagerBasedRLEnv,
+    target_phase: int,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    return (env._ls_phase_entered == int(target_phase)).float()
+
+
+def jump_base_progress_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    robot: Articulation = env.scene[robot_cfg.name]
+    rise = robot.data.root_pos_w[:, 2] - env._ls_settled_base_z
+    if not hasattr(env, "_ls_prev_base_rise"):
+        env._ls_prev_base_rise = rise.clone()
+    reset = (env.episode_length_buf == 0) | (env._ls_phase_entered == PHASE_JUMP)
+    env._ls_prev_base_rise[reset] = rise[reset]
+    progress = torch.clamp(rise - env._ls_prev_base_rise, min=-0.02, max=0.02)
+    env._ls_prev_base_rise[:] = rise
+    return (env._ls_phase == PHASE_JUMP).float() * env._ls_rear_ground.float() * progress
+
+
+def rear_support_loss_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    rear_contacts = _feet_grounded(env, other_feet_sensor_cfg).float().sum(dim=1)
+    active = (env._ls_phase == PHASE_JUMP) | (env._ls_phase == PHASE_PRESS)
+    return active.float() * (2.0 - rear_contacts)
+
+
+def press_approach_progress_reward(
+    env: ManagerBasedRLEnv,
+    foot_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    distance = torch.linalg.norm(_left_foot_pos_w(env, foot_cfg=foot_cfg) - env._ls_switch_center_w, dim=1)
+    if not hasattr(env, "_ls_prev_press_dist"):
+        env._ls_prev_press_dist = distance.clone()
+    reset = (env.episode_length_buf == 0) | (env._ls_phase_entered == PHASE_PRESS)
+    env._ls_prev_press_dist[reset] = distance[reset]
+    progress = torch.clamp(env._ls_prev_press_dist - distance, min=-0.02, max=0.02)
+    env._ls_prev_press_dist[:] = distance
+    return (env._ls_phase == PHASE_PRESS).float() * progress
+
+
+def phase_stability_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    score = stability_reward(env=env, robot_cfg=robot_cfg)
+    active = (env._ls_phase == PHASE_STAND) | (env._ls_phase == PHASE_LAND)
+    return active.float() * score
+
+
+def landing_recovery_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    robot: Articulation = env.scene[robot_cfg.name]
+    contact_fraction = _feet_grounded(env, all_feet_sensor_cfg).float().mean(dim=1)
+    speed = torch.linalg.norm(robot.data.root_lin_vel_w, dim=1)
+    angular_speed = torch.linalg.norm(robot.data.root_ang_vel_w, dim=1)
+    tilt = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
+    recovery = contact_fraction * torch.exp(-torch.square(speed / 0.25) - torch.square(angular_speed / 0.5) - torch.square(tilt / 0.25))
+    return (env._ls_phase == PHASE_LAND).float() * recovery
+
+
+def phase_vertical_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    robot: Articulation = env.scene[robot_cfg.name]
+    active = (env._ls_phase == PHASE_STAND) | (env._ls_phase == PHASE_LAND)
+    return active.float() * torch.square(robot.data.root_lin_vel_w[:, 2])
+
+
+def landing_impact_penalty(
+    env: ManagerBasedRLEnv,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    foot_cfg: SceneEntityCfg,
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+    force_threshold: float = 250.0,
+) -> torch.Tensor:
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
+    )
+    sensor: ContactSensor = env.scene[all_feet_sensor_cfg.name]
+    force_z = torch.abs(sensor.data.net_forces_w[:, all_feet_sensor_cfg.body_ids, 2]).amax(dim=1)
+    excess = torch.clamp((force_z - float(force_threshold)) / float(force_threshold), min=0.0, max=2.0)
+    return (env._ls_phase == PHASE_LAND).float() * torch.square(excess)
+
+
 def stability_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -741,234 +1162,24 @@ def stability_reward(
     )
 
 
-def base_to_switch_staging_progress_reward(
-    env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    desired_distance: float = 0.22,
-    start_step: int = 0,
-    end_step: int = 6_000,
-    ramp_steps: int = 1,
-) -> torch.Tensor:
-    """Reward bounded progress toward a safe pose directly in front of the switch."""
-    _ensure_switch_buffers(env)
-    robot: Articulation = env.scene[robot_cfg.name]
-    staging_xy = env._ls_switch_center_w[:, :2].clone()
-    staging_xy[:, 0] -= float(desired_distance)
-    dist = torch.linalg.norm(robot.data.root_pos_w[:, :2] - staging_xy, dim=1)
-
-    if not hasattr(env, "_ls_prev_base_stage_dist") or env._ls_prev_base_stage_dist.shape[0] != env.num_envs:
-        env._ls_prev_base_stage_dist = dist.clone()
-
-    reset_mask = env.episode_length_buf == 0
-    env._ls_prev_base_stage_dist[reset_mask] = dist[reset_mask]
-    progress = torch.clamp(env._ls_prev_base_stage_dist - dist, min=0.0, max=0.02)
-    env._ls_prev_base_stage_dist[:] = dist
-
-    alpha = _curriculum_window(env, start_step=start_step, ramp_steps=ramp_steps, end_step=end_step)
-    return alpha * (~env._ls_success).float() * progress
-
-
-def left_leg_to_switch_progress_reward(
-    env: ManagerBasedRLEnv,
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    start_step: int = 20_000,
-    end_step: int = 60_000,
-    ramp_steps: int = 20_000,
-) -> torch.Tensor:
-    _ensure_switch_buffers(env)
-    foot_pos_w = _left_foot_pos_w(env, foot_cfg=foot_cfg)
-    target_pos_w = env._ls_switch_center_w.clone()
-    target_pos_w[:, 2] += 0.012 * env._ls_target_side_sign
-    dist = torch.linalg.norm(foot_pos_w - target_pos_w, dim=1)
-
-    if not hasattr(env, "_ls_prev_leg_dist") or env._ls_prev_leg_dist.shape[0] != env.num_envs:
-        env._ls_prev_leg_dist = dist.clone()
-
-    reset_mask = env.episode_length_buf == 0
-    env._ls_prev_leg_dist[reset_mask] = dist[reset_mask]
-    progress = torch.clamp(env._ls_prev_leg_dist - dist, min=0.0, max=0.02)
-    env._ls_prev_leg_dist[:] = dist
-
-    alpha = _curriculum_window(env, start_step=start_step, ramp_steps=ramp_steps, end_step=end_step)
-    # Broad early basin: the nominal foot starts far below a 0.72--0.78 m switch.
-    proximity = torch.exp(-torch.square(dist / 0.45))
-    return alpha * (~env._ls_success).float() * (progress + 0.10 * proximity)
-
-
-def switch_touch_reward(
-    env: ManagerBasedRLEnv,
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-    start_step: int = 60_000,
-    end_step: int = 100_000,
-    ramp_steps: int = 20_000,
-    contact_x_threshold: float = 0.10,
-    contact_y_threshold: float = 0.08,
-    contact_z_threshold: float = 0.08,
-) -> torch.Tensor:
-    _update_switch_latch_and_interaction(
-        env=env,
-        foot_cfg=foot_cfg,
-        sensor_cfg=sensor_cfg,
-        contact_x_threshold=contact_x_threshold,
-        contact_y_threshold=contact_y_threshold,
-        contact_z_threshold=contact_z_threshold,
-    )
-    alpha = _curriculum_window(env, start_step=start_step, ramp_steps=ramp_steps, end_step=end_step)
-    return alpha * (~env._ls_success).float() * env._ls_contact.float()
-
-
-def correct_side_touch_reward(
-    env: ManagerBasedRLEnv,
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-    start_step: int = 100_000,
-    ramp_steps: int = 20_000,
-    contact_x_threshold: float = 0.10,
-    contact_y_threshold: float = 0.08,
-    contact_z_threshold: float = 0.08,
-) -> torch.Tensor:
-    _update_switch_latch_and_interaction(
-        env=env,
-        foot_cfg=foot_cfg,
-        sensor_cfg=sensor_cfg,
-        contact_x_threshold=contact_x_threshold,
-        contact_y_threshold=contact_y_threshold,
-        contact_z_threshold=contact_z_threshold,
-    )
-    alpha = _curriculum_ramp(env, start_step=start_step, ramp_steps=ramp_steps)
-    return alpha * (~env._ls_success).float() * env._ls_correct_touch.float()
-
-
-def wrong_side_touch_penalty(
-    env: ManagerBasedRLEnv,
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-    start_step: int = 100_000,
-    ramp_steps: int = 20_000,
-    contact_x_threshold: float = 0.10,
-    contact_y_threshold: float = 0.08,
-    contact_z_threshold: float = 0.08,
-) -> torch.Tensor:
-    _update_switch_latch_and_interaction(
-        env=env,
-        foot_cfg=foot_cfg,
-        sensor_cfg=sensor_cfg,
-        contact_x_threshold=contact_x_threshold,
-        contact_y_threshold=contact_y_threshold,
-        contact_z_threshold=contact_z_threshold,
-    )
-    alpha = _curriculum_ramp(env, start_step=start_step, ramp_steps=ramp_steps)
-    return alpha * env._ls_wrong_touch.float()
-
-
-def switch_toggle_success_reward(
-    env: ManagerBasedRLEnv,
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-    start_step: int = 100_000,
-    ramp_steps: int = 20_000,
-    contact_x_threshold: float = 0.10,
-    contact_y_threshold: float = 0.08,
-    contact_z_threshold: float = 0.08,
-) -> torch.Tensor:
-    _update_switch_latch_and_interaction(
-        env=env,
-        foot_cfg=foot_cfg,
-        sensor_cfg=sensor_cfg,
-        contact_x_threshold=contact_x_threshold,
-        contact_y_threshold=contact_y_threshold,
-        contact_z_threshold=contact_z_threshold,
-    )
-    alpha = _curriculum_ramp(env, start_step=start_step, ramp_steps=ramp_steps)
-    return alpha * env._ls_toggle_trigger.float()
-
-
-def robot_stop_after_toggle_reward(
-    env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    vel_std: float = 0.08,
-    start_step: int = 100_000,
-    ramp_steps: int = 20_000,
-) -> torch.Tensor:
-    _ensure_switch_buffers(env)
-    robot: Articulation = env.scene[robot_cfg.name]
-    planar_speed = torch.linalg.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
-    stop_score = torch.exp(-torch.square(planar_speed) / (vel_std * vel_std))
-    alpha = _curriculum_ramp(env, start_step=start_step, ramp_steps=ramp_steps)
-    return alpha * env._ls_success.float() * stop_score
-
-
 def lightswitch_goal_reached(
-    env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-    robot_speed_threshold: float = 0.10,
-    hold_time_s: float = 0.8,
-):
-    return _finished_stable_mask(
-        env=env,
-        robot_cfg=robot_cfg,
-        foot_cfg=foot_cfg,
-        sensor_cfg=sensor_cfg,
-        robot_speed_threshold=robot_speed_threshold,
-        hold_time_s=hold_time_s,
-    )
-
-
-def _finished_stable_mask(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     foot_cfg: SceneEntityCfg,
-    sensor_cfg: SceneEntityCfg,
-    robot_speed_threshold: float,
-    hold_time_s: float,
-) -> torch.Tensor:
-    _update_switch_latch_and_interaction(env=env, foot_cfg=foot_cfg, sensor_cfg=sensor_cfg)
-    _ensure_switch_buffers(env)
-
-    robot: Articulation = env.scene[robot_cfg.name]
-    planar_speed = torch.linalg.norm(robot.data.root_lin_vel_w[:, :2], dim=1)
-    angular_speed = torch.linalg.norm(robot.data.root_ang_vel_w, dim=1)
-    tilt = torch.linalg.norm(robot.data.projected_gravity_b[:, :2], dim=1)
-    success_and_stable = (
-        env._ls_success
-        & (planar_speed <= float(robot_speed_threshold))
-        & (angular_speed <= 0.35)
-        & (tilt <= 0.20)
+    other_feet_cfg: SceneEntityCfg,
+    foot_sensor_cfg: SceneEntityCfg,
+    other_feet_sensor_cfg: SceneEntityCfg,
+    front_feet_sensor_cfg: SceneEntityCfg,
+    all_feet_sensor_cfg: SceneEntityCfg,
+    settle_time_s: float,
+    lift_height: float,
+    lift_hold_time_s: float,
+    jump_base_rise: float,
+    land_hold_time_s: float,
+):
+    _update_behavior_phase(
+        env, robot_cfg, foot_cfg, other_feet_cfg, foot_sensor_cfg, other_feet_sensor_cfg,
+        front_feet_sensor_cfg, all_feet_sensor_cfg, settle_time_s, lift_height,
+        lift_hold_time_s, jump_base_rise, land_hold_time_s
     )
-
-    required_steps = max(1, int(math.ceil(float(hold_time_s) / _env_step_time_s(env))))
-    current_step = int(env.common_step_counter)
-    if getattr(env, "_ls_success_hold_last_step", -1) != current_step:
-        reset_mask = env.episode_length_buf == 0
-        env._ls_success_hold_counter[reset_mask] = 0
-        env._ls_success_hold_counter = torch.where(
-            success_and_stable,
-            env._ls_success_hold_counter + 1,
-            torch.zeros_like(env._ls_success_hold_counter),
-        )
-        env._ls_success_hold_last_step = current_step
-
-    return env._ls_success_hold_counter >= required_steps
-
-
-def correct_finish_reward(
-    env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-    foot_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="FL_foot.*"),
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-    robot_speed_threshold: float = 0.10,
-    hold_time_s: float = 0.8,
-) -> torch.Tensor:
-    """Largest one-shot reward: toggle, recover, and hold a stable stance."""
-    finished = _finished_stable_mask(
-        env=env,
-        robot_cfg=robot_cfg,
-        foot_cfg=foot_cfg,
-        sensor_cfg=sensor_cfg,
-        robot_speed_threshold=robot_speed_threshold,
-        hold_time_s=hold_time_s,
-    )
-    return _one_shot_bool_trigger(env=env, mask=finished, state_prefix="_ls_finish").float()
+    return env._ls_phase == PHASE_SUCCESS

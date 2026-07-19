@@ -240,6 +240,7 @@ class RobotSceneCfg(InteractiveSceneCfg):
         visual_material=sim_utils.MdlFileCfg(
             mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
             project_uvw=True,
+            albedo_brightness=0.7,
             texture_scale=(0.25, 0.25),
         ),
         debug_vis=False,
@@ -282,8 +283,18 @@ class RobotSceneCfg(InteractiveSceneCfg):
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
-            intensity=750.0,
+            intensity=400.0,
             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
+
+    cinematic_key_light = AssetBaseCfg(
+        prim_path="/World/cinematicKeyLight",
+        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.816, 0.453, -0.179, 0.311)),
+        spawn=sim_utils.DistantLightCfg(
+            color=(1.0, 0.82, 0.68),
+            intensity=1800.0,
+            angle=4.0,
         ),
     )
 
@@ -986,10 +997,12 @@ class RobotPushEnvCfg(ManagerBasedRLEnvCfg):
 class RobotPushPlayEnvCfg(RobotPushEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.num_envs = 32
+        self.scene.num_envs = 16
         # Pack environments slightly closer for play/video without changing training spacing.
         self.scene.env_spacing = 6.0
         self.scene.terrain.terrain_generator.size = (6.0, 6.0)
+        # Extend the flat perimeter so cinematic cameras do not reveal the terrain edge.
+        self.scene.terrain.terrain_generator.border_width = 30.0
         # Evaluation starts at the final trained command envelope and corruption level.
         self.actions.pre_trained_policy_action.command_limit_curriculum_steps = 0
         for observation_group in (self.observations.policy, self.observations.critic):
@@ -997,7 +1010,7 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
                 getattr(observation_group, term_name).params["curriculum_steps"] = 0
         self.observations.policy.enable_corruption = False
         self.observations.critic.enable_corruption = False
-        self.rewards.cube_outside_camera_region_penalty.params["debug_vis"] = True
+        self.rewards.cube_outside_camera_region_penalty.params["debug_vis"] = False # Camera Area Polygon
         self.events.cube_size_variation.params["scale_range"] = (1.5, 1.5)
         # Rubber feet and a plastic cube on a plastic/vinyl lab floor.
         # Material coefficients are multiplied by the terrain coefficients.
@@ -1008,7 +1021,10 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
         self.events.floor_friction_per_reset.params["static_friction_range"] = (0.80, 0.80)
         self.events.floor_friction_per_reset.params["dynamic_friction_range"] = (0.65, 0.65)
         self.commands.base_velocity.debug_vis = True
-        self.actions.pre_trained_policy_action.debug_vis = True
+        self.actions.pre_trained_policy_action.debug_vis = True 
+        small_arrow_scale = (0.3, 0.3, 0.3)
+        self.commands.base_velocity.goal_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
+        self.commands.base_velocity.current_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
 
         reset_mode = os.getenv("GO2_PUSH_PLAY_RESET_MODE", "standard").strip().lower()
         if reset_mode == "success_keep_robot":
