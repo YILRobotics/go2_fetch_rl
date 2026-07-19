@@ -160,7 +160,7 @@ class _CinematicCameraController:
     _DESCENT_FRACTION = 0.55
     _FLY_HEIGHT_REDUCTION = 0.5
     _FLY_FOCUS_HEIGHT = 0.35
-    _CHASE_DISTANCE = 4.0
+    _CHASE_DISTANCE = 3.0
     _CHASE_SIDE_OFFSET = 1.5
     _CHASE_HEIGHT = 1.0
     _CHASE_LOOK_AHEAD = 0.4

@@ -53,7 +53,7 @@ def _phase_tracking_params() -> dict:
             "contact_forces", body_names=["FL_foot.*", "FR_foot.*"]
         ),
         "all_feet_sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot.*"),
-        "settle_time_s": 0.25,
+        "settle_time_s": 1.0,
         "lift_height": 0.30,
         "lift_hold_time_s": 0.06,
         "jump_base_rise": 0.12,
@@ -184,7 +184,7 @@ class EventCfg:
         mode="reset",
         params={
             "position_range": (1.0, 1.0),
-            "velocity_range": (-1.0, 1.0),
+            "velocity_range": (-0.2, 0.2),
         },
     )
 
@@ -364,6 +364,15 @@ class RewardsCfg:
         weight=0.02,
         params=_phase_tracking_params(),
     )
+    stand_pose = RewTerm(
+        func=lightswitch_mdp.stand_pose_reward,
+        weight=2.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "joint_std": 0.25,
+            "reward_duration_s": 1.5,
+        },
+    )
     landing_impact = RewTerm(
         func=lightswitch_mdp.landing_impact_penalty,
         weight=-2.0,
@@ -403,7 +412,14 @@ class TerminationsCfg:
         },
     )
 
-    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 1.0})
+    bad_orientation = DoneTerm(
+        func=lightswitch_mdp.phase_aware_bad_orientation,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "nominal_limit_angle": 1.0,
+            "maneuver_limit_angle": 1.40,
+        },
+    )
 
 
 @configclass

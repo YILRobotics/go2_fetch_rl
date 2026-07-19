@@ -788,6 +788,29 @@ def behavior_phase_one_hot(env: ManagerBasedRLEnv) -> torch.Tensor:
     return torch.nn.functional.one_hot(env._ls_phase, num_classes=NUM_BEHAVIOR_PHASES).float()
 
 
+def phase_aware_bad_orientation(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    nominal_limit_angle: float = 1.0,
+    maneuver_limit_angle: float = 1.40,
+) -> torch.Tensor:
+    """Allow the deliberate rear-supported lean and the recovery after contact."""
+    _ensure_switch_buffers(env)
+    robot: Articulation = env.scene[robot_cfg.name]
+    tilt_angle = torch.acos(torch.clamp(-robot.data.projected_gravity_b[:, 2], -1.0, 1.0)).abs()
+    maneuvering = (
+        (env._ls_phase == PHASE_JUMP)
+        | (env._ls_phase == PHASE_PRESS)
+        | (env._ls_phase == PHASE_LAND)
+    )
+    limit = torch.where(
+        maneuvering,
+        torch.full_like(tilt_angle, float(maneuver_limit_angle)),
+        torch.full_like(tilt_angle, float(nominal_limit_angle)),
+    )
+    return tilt_angle > limit
+
+
 def _feet_grounded(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg,
@@ -813,7 +836,7 @@ def _update_behavior_phase(
         "contact_forces", body_names=["FL_foot.*", "FR_foot.*"]
     ),
     all_feet_sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=".*_foot.*"),
-    settle_time_s: float = 0.25,
+    settle_time_s: float = 1.0,
     lift_height: float = 0.30,
     lift_hold_time_s: float = 0.10,
     jump_base_rise: float = 0.12,
@@ -844,16 +867,14 @@ def _update_behavior_phase(
     # Presses are accepted only while both rear feet support the robot.
     _update_switch_latch_and_interaction(env=env, foot_cfg=foot_cfg, sensor_cfg=foot_sensor_cfg)
 
-    # Reset already places the robot in a nominal stance.  This gate only verifies a
-    # short visible settling period; tight force/velocity limits previously trapped
-    # more than 99% of environments in STAND forever.
-    grounded_count = _feet_grounded(env, all_feet_sensor_cfg).sum(dim=1)
+    joint_pose_error = torch.abs(robot.data.joint_pos - robot.data.default_joint_pos).mean(dim=1)
     stable_stand = (
-        (grounded_count >= 3)
-        & (planar_speed <= 0.30)
-        & (vertical_speed <= 0.20)
-        & (angular_speed <= 0.80)
-        & (tilt <= 0.35)
+        all_ground
+        & (planar_speed <= 0.10)
+        & (vertical_speed <= 0.08)
+        & (angular_speed <= 0.35)
+        & (tilt <= 0.15)
+        & (joint_pose_error <= 0.15)
     )
     stand_mask = old_phase == PHASE_STAND
     env._ls_settle_hold_counter = torch.where(
@@ -862,11 +883,7 @@ def _update_behavior_phase(
         torch.where(stand_mask, torch.zeros_like(env._ls_settle_hold_counter), env._ls_settle_hold_counter),
     )
     settle_steps = max(1, int(math.ceil(float(settle_time_s) / dt)))
-    settle_fallback_steps = max(settle_steps, int(math.ceil(0.50 / dt)))
-    settle_fallback = (env.episode_length_buf >= settle_fallback_steps) & (tilt <= 0.50)
-    enter_jump_from_stand = stand_mask & (
-        (env._ls_settle_hold_counter >= settle_steps) | settle_fallback
-    )
+    enter_jump_from_stand = stand_mask & (env._ls_settle_hold_counter >= settle_steps)
     if torch.any(enter_jump_from_stand):
         # Go directly into the jump.  The manipulation leg does not need to be
         # raised separately before takeoff.
@@ -1141,6 +1158,21 @@ def phase_stability_reward(
     score = stability_reward(env=env, robot_cfg=robot_cfg)
     active = (env._ls_phase == PHASE_STAND) | (env._ls_phase == PHASE_LAND)
     return active.float() * score
+
+
+def stand_pose_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    joint_std: float = 0.25,
+    reward_duration_s: float = 1.5,
+) -> torch.Tensor:
+    """Hold the nominal Go2 joint configuration before starting the jump."""
+    _ensure_switch_buffers(env)
+    robot: Articulation = env.scene[robot_cfg.name]
+    mean_squared_error = torch.square(robot.data.joint_pos - robot.data.default_joint_pos).mean(dim=1)
+    pose_score = torch.exp(-mean_squared_error / (float(joint_std) * float(joint_std)))
+    within_reward_window = env.episode_length_buf * _env_step_time_s(env) <= float(reward_duration_s)
+    return ((env._ls_phase == PHASE_STAND) & within_reward_window).float() * pose_score
 
 
 def landing_recovery_reward(

@@ -493,6 +493,8 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 256
 
+        self.episode_length_s = 60.0
+
         # self.scene.terrain.terrain_generator.num_rows = 1
         # self.scene.terrain.terrain_generator.num_cols = 2
 
