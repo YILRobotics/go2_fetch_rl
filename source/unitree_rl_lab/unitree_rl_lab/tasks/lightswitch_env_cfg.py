@@ -37,13 +37,28 @@ WALL_X_OFFSET = 0.036
 ROBOT_FORWARD_RANGE = (0.18, 0.30)
 ROBOT_LATERAL_RANGE = (-0.10, 0.10)
 
-CURR_LEG_START_STEP = 0
-CURR_TOUCH_START_STEP = 1_000
-CURR_PUSH_START_STEP = 3_000
-CURR_APPROACH_END_STEP = 6_000
-CURR_LEG_RAMP_STEPS = 1
-CURR_TOUCH_RAMP_STEPS = 2_000
-CURR_PUSH_RAMP_STEPS = 3_000
+def _phase_tracking_params() -> dict:
+    """Fresh entity selectors for every manager term that advances the task phase."""
+    return {
+        "robot_cfg": SceneEntityCfg("robot"),
+        "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
+        "other_feet_cfg": SceneEntityCfg(
+            "robot", body_names=["RL_foot.*", "RR_foot.*"]
+        ),
+        "foot_sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
+        "other_feet_sensor_cfg": SceneEntityCfg(
+            "contact_forces", body_names=["RL_foot.*", "RR_foot.*"]
+        ),
+        "front_feet_sensor_cfg": SceneEntityCfg(
+            "contact_forces", body_names=["FL_foot.*", "FR_foot.*"]
+        ),
+        "all_feet_sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot.*"),
+        "settle_time_s": 1.0,
+        "lift_height": 0.30,
+        "lift_hold_time_s": 0.06,
+        "jump_base_rise": 0.12,
+        "land_hold_time_s": 0.50,
+    }
 
 
 LIGHTSWITCH_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
@@ -169,7 +184,7 @@ class EventCfg:
         mode="reset",
         params={
             "position_range": (1.0, 1.0),
-            "velocity_range": (-1.0, 1.0),
+            "velocity_range": (-0.2, 0.2),
         },
     )
 
@@ -244,7 +259,7 @@ class ObservationsCfg:
             clip=(-2.0, 2.0),
             params={"robot_cfg": SceneEntityCfg("robot")},
         )
-        requested_side = ObsTerm(func=lightswitch_mdp.requested_switch_side, clip=(-1.0, 1.0))
+        behavior_phase = ObsTerm(func=lightswitch_mdp.behavior_phase_one_hot, clip=(0.0, 1.0))
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -272,7 +287,7 @@ class ObservationsCfg:
             clip=(-2.0, 2.0),
             params={"robot_cfg": SceneEntityCfg("robot")},
         )
-        requested_side = ObsTerm(func=lightswitch_mdp.requested_switch_side, clip=(-1.0, 1.0))
+        behavior_phase = ObsTerm(func=lightswitch_mdp.behavior_phase_one_hot, clip=(0.0, 1.0))
         switch_state = ObsTerm(func=lightswitch_mdp.privileged_switch_state, clip=(-20.0, 20.0))
         switch_contact = ObsTerm(
             func=lightswitch_mdp.switch_contact_proxy_obs,
@@ -292,113 +307,92 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-    # Stage 1: stand and stabilize.
+    # Ordered one-shot milestones.  Isaac Lab multiplies these weights by step_dt.
+    settled_stance = RewTerm(
+        func=lightswitch_mdp.phase_milestone_reward,
+        weight=5.0,
+        params={**_phase_tracking_params(), "target_phase": lightswitch_mdp.PHASE_JUMP},
+    )
+    jump_base_progress = RewTerm(
+        func=lightswitch_mdp.jump_base_progress_reward,
+        weight=400.0,
+        params=_phase_tracking_params(),
+    )
+    rear_support_loss = RewTerm(
+        func=lightswitch_mdp.rear_support_loss_penalty,
+        weight=-5.0,
+        params=_phase_tracking_params(),
+    )
+    front_foot_excess_speed = RewTerm(
+        func=lightswitch_mdp.front_foot_excess_speed_penalty,
+        weight=-2.0,
+        params=_phase_tracking_params(),
+    )
+    jump_crouch = RewTerm(
+        func=lightswitch_mdp.jump_crouch_penalty,
+        weight=-5.0,
+        params=_phase_tracking_params(),
+    )
+    jump_complete = RewTerm(
+        func=lightswitch_mdp.phase_milestone_reward,
+        weight=250.0,
+        params={**_phase_tracking_params(), "target_phase": lightswitch_mdp.PHASE_PRESS},
+    )
+    switch_approach = RewTerm(
+        func=lightswitch_mdp.press_approach_progress_reward,
+        weight=100.0,
+        params=_phase_tracking_params(),
+    )
+    switch_pressed = RewTerm(
+        func=lightswitch_mdp.phase_milestone_reward,
+        weight=250.0,
+        params={**_phase_tracking_params(), "target_phase": lightswitch_mdp.PHASE_LAND},
+    )
+    landing_recovery = RewTerm(
+        func=lightswitch_mdp.landing_recovery_reward,
+        weight=5.0,
+        params=_phase_tracking_params(),
+    )
+    safe_landing = RewTerm(
+        func=lightswitch_mdp.phase_milestone_reward,
+        weight=500.0,
+        params={**_phase_tracking_params(), "target_phase": lightswitch_mdp.PHASE_SUCCESS},
+    )
+
     stability = RewTerm(
-        func=lightswitch_mdp.stability_reward,
-        weight=0.1,
-        params={"robot_cfg": SceneEntityCfg("robot")},
+        func=lightswitch_mdp.phase_stability_reward,
+        weight=0.02,
+        params=_phase_tracking_params(),
     )
-
-    base_staging_progress = RewTerm(
-        func=lightswitch_mdp.base_to_switch_staging_progress_reward,
-        weight=8.0,
+    stand_pose = RewTerm(
+        func=lightswitch_mdp.stand_pose_reward,
+        weight=2.0,
         params={
             "robot_cfg": SceneEntityCfg("robot"),
-            "desired_distance": 0.22,
-            "start_step": CURR_LEG_START_STEP,
-            "end_step": CURR_APPROACH_END_STEP,
-            "ramp_steps": CURR_LEG_RAMP_STEPS,
+            "joint_std": 0.25,
+            "reward_duration_s": 1.5,
         },
     )
-
-    # Stage 2: approach with left leg.
-    left_leg_approach = RewTerm(
-        func=lightswitch_mdp.left_leg_to_switch_progress_reward,
-        weight=25.0,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "start_step": CURR_LEG_START_STEP,
-            "end_step": CURR_APPROACH_END_STEP,
-            "ramp_steps": CURR_LEG_RAMP_STEPS,
-        },
+    landing_impact = RewTerm(
+        func=lightswitch_mdp.landing_impact_penalty,
+        weight=-2.0,
+        params={**_phase_tracking_params(), "force_threshold": 250.0},
     )
-
-    # Stage 3: touch switch area.
-    switch_touch = RewTerm(
-        func=lightswitch_mdp.switch_touch_reward,
-        weight=30.0,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-            "start_step": CURR_TOUCH_START_STEP,
-            "end_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_TOUCH_RAMP_STEPS,
-        },
+    failure_termination_penalty = RewTerm(
+        func=mdp.is_terminated_term,
+        weight=-10.0,
+        params={"term_keys": ["base_contact", "bad_orientation"]},
     )
-
-    # Stage 4: press correct side and toggle (big reward), then stand still.
-    correct_side_touch = RewTerm(
-        func=lightswitch_mdp.correct_side_touch_reward,
-        weight=5.5,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-            "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_PUSH_RAMP_STEPS,
-        },
+    base_linear_velocity = RewTerm(
+        func=lightswitch_mdp.phase_vertical_velocity_penalty,
+        weight=-0.2,
+        params=_phase_tracking_params(),
     )
-
-    switch_toggle_success = RewTerm(
-        func=lightswitch_mdp.switch_toggle_success_reward,
-        weight=60.0,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-            "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_PUSH_RAMP_STEPS,
-        },
-    )
-
-    robot_stop_after_toggle = RewTerm(
-        func=lightswitch_mdp.robot_stop_after_toggle_reward,
-        weight=6.0,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "vel_std": 0.08,
-            "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_PUSH_RAMP_STEPS,
-        },
-    )
-
-    correct_finish = RewTerm(
-        func=lightswitch_mdp.correct_finish_reward,
-        weight=150.0,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-            "robot_speed_threshold": 0.10,
-            "hold_time_s": 0.8,
-        },
-    )
-
-    wrong_side_touch = RewTerm(
-        func=lightswitch_mdp.wrong_side_touch_penalty,
-        weight=-1.2,
-        params={
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-            "start_step": CURR_PUSH_START_STEP,
-            "ramp_steps": CURR_PUSH_RAMP_STEPS,
-        },
-    )
-
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-10.0)
-    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.1)
     base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.01)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
+    time_penalty = RewTerm(func=mdp.is_alive, weight=-0.20)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-8.0)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-0.01)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-0.02)
 
 
 @configclass
@@ -407,13 +401,7 @@ class TerminationsCfg:
 
     success = DoneTerm(
         func=lightswitch_mdp.lightswitch_goal_reached,
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "foot_cfg": SceneEntityCfg("robot", body_names="FL_foot.*"),
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names="FL_foot.*"),
-            "robot_speed_threshold": 0.10,
-            "hold_time_s": 0.8,
-        },
+        params=_phase_tracking_params(),
     )
 
     base_contact = DoneTerm(
@@ -424,23 +412,40 @@ class TerminationsCfg:
         },
     )
 
-    bad_orientation = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 1.0})
+    bad_orientation = DoneTerm(
+        func=lightswitch_mdp.phase_aware_bad_orientation,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "nominal_limit_angle": 1.0,
+            "maneuver_limit_angle": 1.40,
+        },
+    )
 
 
 @configclass
 class CurriculumCfg:
     common_step_counter = CurrTerm(func=lightswitch_mdp.curriculum_common_step_counter, params={})
-    leg_stage_alpha = CurrTerm(
-        func=lightswitch_mdp.curriculum_stage_alpha,
-        params={"start_step": CURR_LEG_START_STEP, "ramp_steps": CURR_LEG_RAMP_STEPS},
+    behavior_difficulty = CurrTerm(
+        func=lightswitch_mdp.curriculum_behavior_difficulty,
+        params={
+            "jump_rise_start": 0.08,
+            "jump_rise_target": 0.12,
+            "success_rate_start": 0.40,
+            "success_rate_full": 0.70,
+            "ema_rate": 0.10,
+        },
     )
-    touch_stage_alpha = CurrTerm(
-        func=lightswitch_mdp.curriculum_stage_alpha,
-        params={"start_step": CURR_TOUCH_START_STEP, "ramp_steps": CURR_TOUCH_RAMP_STEPS},
+    phase_stand_fraction = CurrTerm(
+        func=lightswitch_mdp.curriculum_phase_fraction, params={"phase": lightswitch_mdp.PHASE_STAND}
     )
-    push_stage_alpha = CurrTerm(
-        func=lightswitch_mdp.curriculum_stage_alpha,
-        params={"start_step": CURR_PUSH_START_STEP, "ramp_steps": CURR_PUSH_RAMP_STEPS},
+    phase_jump_fraction = CurrTerm(
+        func=lightswitch_mdp.curriculum_phase_fraction, params={"phase": lightswitch_mdp.PHASE_JUMP}
+    )
+    phase_press_fraction = CurrTerm(
+        func=lightswitch_mdp.curriculum_phase_fraction, params={"phase": lightswitch_mdp.PHASE_PRESS}
+    )
+    phase_land_fraction = CurrTerm(
+        func=lightswitch_mdp.curriculum_phase_fraction, params={"phase": lightswitch_mdp.PHASE_LAND}
     )
 
 

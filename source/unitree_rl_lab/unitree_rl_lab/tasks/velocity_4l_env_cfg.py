@@ -117,8 +117,18 @@ class RobotSceneCfg(InteractiveSceneCfg):
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
-            intensity=750.0,
+            intensity=400.0,
             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
+
+    cinematic_key_light = AssetBaseCfg(
+        prim_path="/World/cinematicKeyLight",
+        init_state=AssetBaseCfg.InitialStateCfg(rot=(0.816, 0.453, -0.179, 0.311)),
+        spawn=sim_utils.DistantLightCfg(
+            color=(1.0, 0.82, 0.68),
+            intensity=1800.0,
+            angle=4.0,
         ),
     )
 
@@ -483,6 +493,8 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         super().__post_init__()
         self.scene.num_envs = 256
 
+        self.episode_length_s = 60.0
+
         # self.scene.terrain.terrain_generator.num_rows = 1
         # self.scene.terrain.terrain_generator.num_cols = 2
 
@@ -501,6 +513,10 @@ class RobotPlayEnvCfg(RobotEnvCfg):
         
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
         self.curriculum.lin_vel_cmd_levels = None      
+
+        small_arrow_scale = (0.28, 0.28, 0.28)
+        self.commands.base_velocity.goal_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
+        self.commands.base_velocity.current_vel_visualizer_cfg.markers["arrow"].scale = small_arrow_scale
 
         # Set cmd vel manually for play
         # self.commands.base_velocity.ranges = mdp.UniformLevelVelocityCommandCfg.Ranges(

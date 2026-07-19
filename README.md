@@ -1,6 +1,14 @@
 # Go2 Fechrobot RL with IsaacSim/Lab
 
-![Play Eval Demo](data/rl-video-step-0_8.gif)
+## Policy Demonstrations
+
+### High-Level Policy — Object Pushing
+
+![High-level object-pushing policy demonstration](data/push_video_20260719_131006.gif)
+
+### Low-Level Policy — Locomotion
+
+![Low-level locomotion policy demonstration](data/vel_video_20260719_140633.gif)
 
 ## Environment Setup 
 
@@ -160,6 +168,58 @@ python scripts/rsl_rl/play.py \
   --headless \
   --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/exported/policy.pt \
   --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-07-07_10-07-42_ff_5_19/model_2499.pt
+```
+
+
+Make good videos:
+```bash
+python scripts/rsl_rl/play.py \
+    --task Unitree-Go2-PushCube-4L \
+    --num_envs 16 \
+    --terrain_rows 2 \
+    --terrain_cols 16 \
+    --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-07-13_11-12-00_ff_5_22_10hz/model_1999.pt \
+    --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/exported/policy.pt \
+    --play_reset_mode success_keep_robot \
+    --camera_mode flythrough \
+    --camera_eye -5 5 2.8 \
+    --camera_lookat 0 0 0.4 \
+    --video \
+    --video_length 350 \
+    --headless \
+    --seed 42
+
+
+python scripts/rsl_rl/play.py \
+    --task Unitree-Go2-PushCube-4L \
+    --num_envs 16 \
+    --terrain_rows 2 \
+    --terrain_cols 16 \
+    --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_pushcube_4l/2026-07-13_11-12-00_ff_5_22_10hz/model_1999.pt \
+    --low_level_policy_path /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/exported/policy.pt \
+    --play_reset_mode success_keep_robot \
+    --camera_mode low_chase \
+    --camera_eye -5 5 2.8 \
+    --camera_lookat 0 0 0.4 \
+    --video \
+    --video_length 250 \
+    --headless \
+    --seed 42
+
+python scripts/rsl_rl/play.py \
+    --task Unitree-Go2-Velocity-4L \
+    --num_envs 1024 \
+    --terrain_rows 2 \
+    --terrain_cols 16 \
+    --checkpoint /home/ferdinand/fetchrobot/ferdinand/go2_fetch_rl/logs/rsl_rl/unitree_go2_velocity_4l/2026-06-30_11-11-40_walk_ff_5/model_6999.pt \
+    --camera_mode low_chase \
+    --chase_rotation off \
+    --camera_eye 5 5 2.5 \
+    --camera_lookat 0 0 -1.8 \
+    --video \
+    --video_length 900 \
+    --headless \
+    --seed 42
 ```
 
 - When omitting --low_level_policy_path, the env tries to auto-pick the latest exported 4L velocity policy.

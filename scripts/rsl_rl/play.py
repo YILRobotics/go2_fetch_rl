@@ -9,6 +9,7 @@
 
 import argparse
 import csv
+import math
 import os
 from importlib.metadata import version
 from pathlib import Path
@@ -32,7 +33,7 @@ parser.add_argument(
     "--camera_mode",
     type=str,
     default="fixed",
-    choices=["fixed", "follow"],
+    choices=["fixed", "follow", "flythrough", "low_chase"],
     help="Camera mode used for rendering/video capture.",
 )
 parser.add_argument(
@@ -41,7 +42,7 @@ parser.add_argument(
     nargs=3,
     # default=[-25.0, 0.0, 5.0],
     default=[-8.0, 8.0, 4.5],
-    help="Camera eye position for fixed/follow modes.",
+    help="Camera eye position for fixed/follow modes and viewing direction for flythrough mode.",
 )
 parser.add_argument(
     "--camera_lookat",
@@ -49,13 +50,20 @@ parser.add_argument(
     nargs=3,
     # default=[-10.0, 0.0, 1.0],
     default=[-1.5, 1.5, 0.0],
-    help="Camera look-at target for fixed/follow modes.",
+    help="Camera look-at target for fixed/follow modes and viewing direction for flythrough mode.",
 )
 parser.add_argument(
     "--camera_follow_prim",
     type=str,
     default="{ENV_REGEX_NS}/Robot/base",
     help="Prim path to follow when using follow camera mode.",
+)
+parser.add_argument(
+    "--chase_rotation",
+    type=str,
+    default="on",
+    choices=["on", "off"],
+    help="Whether low_chase rotates with the robot or keeps a fixed world-space viewing angle.",
 )
 parser.add_argument(
     "--vel_arrows",
@@ -81,6 +89,12 @@ parser.add_argument(
     default="standard",
     choices=["standard", "success_keep_robot"],
     help="Reset behavior for play mode. 'success_keep_robot' keeps the robot on success and only respawns the cube.",
+)
+parser.add_argument(
+    "--record_high_level_observations",
+    action="store_true",
+    default=False,
+    help="Record push-task high-level observations to CSV during play.",
 )
 
 # Terrain
@@ -131,6 +145,224 @@ from isaaclab_tasks.utils import get_checkpoint_path
 
 import unitree_rl_lab.tasks  # noqa: F401
 from unitree_rl_lab.utils.parser_cfg import parse_env_cfg
+
+
+def _record_video_once(step: int) -> bool:
+    """Start the single play recording on the first environment step."""
+    return step == 1
+
+
+class _CinematicCameraController:
+    """Drive smooth flythrough and low-chase viewport shots."""
+
+    _START_BACK_DISTANCE = 20.0
+    _START_HEIGHT = 5.0
+    _DESCENT_FRACTION = 0.55
+    _FLY_HEIGHT_REDUCTION = 0.5
+    _FLY_FOCUS_HEIGHT = 0.35
+    _CHASE_DISTANCE = 3.0
+    _CHASE_SIDE_OFFSET = 1.5
+    _CHASE_HEIGHT = 1.0
+    _CHASE_LOOK_AHEAD = 0.4
+    _FILTER_TIME_CONSTANT = 0.35
+    _CHASE_FILTER_TIME_CONSTANT = 0.65
+    _TELEPORT_DISTANCE = 5.0
+    _ORBIT_ANGLE = math.radians(30.0)
+    _FLYTHROUGH_FRACTION = 0.70
+
+    def __init__(
+        self, env, mode: str, eye, lookat, video_length: int, dt: float, chase_rotation: bool
+    ):
+        self._env = env.unwrapped
+        self._mode = mode
+        self._chase_rotation = chase_rotation
+        self._robot = self._env.scene["robot"]
+        self._dt = float(dt)
+        filter_time_constant = (
+            self._CHASE_FILTER_TIME_CONSTANT if mode == "low_chase" else self._FILTER_TIME_CONSTANT
+        )
+        self._filter_alpha = 1.0 - math.exp(-self._dt / filter_time_constant)
+
+        device = self._robot.data.root_pos_w.device
+        dtype = self._robot.data.root_pos_w.dtype
+        self._configured_eye = torch.tensor(eye, device=device, dtype=dtype)
+        self._configured_lookat = torch.tensor(lookat, device=device, dtype=dtype)
+        configured_view = self._configured_lookat[:2] - self._configured_eye[:2]
+        if torch.linalg.vector_norm(configured_view).item() < 1.0e-6:
+            configured_view = torch.tensor([1.0, 0.0], device=device, dtype=dtype)
+            print("[WARN] Cinematic camera eye and look-at share an XY position; using +X as viewing direction.")
+        self._view_direction = configured_view / torch.linalg.vector_norm(configured_view)
+
+        self._subject_index = self._select_subject()
+        raw_subject = self._subject_position()
+        self._filtered_subject = raw_subject.clone()
+        self._filtered_heading = (
+            self._subject_heading() if self._chase_rotation else self._view_direction.clone()
+        )
+        fixed_left = torch.stack((-self._view_direction[1], self._view_direction[0]))
+        self._fixed_chase_offset = self._view_direction * self._CHASE_DISTANCE
+        self._fixed_chase_offset += fixed_left * self._CHASE_SIDE_OFFSET
+
+        # Push tasks with replicate_physics=False place cloned assets at the scene's default
+        # grid origins, while scene.env_origins may refer to unrelated generated-terrain tiles.
+        # Use the clone origin so the fixed focus matches the selected robot's actual environment.
+        fly_origins = getattr(self._env.scene, "_default_env_origins", None)
+        if fly_origins is None:
+            fly_origins = self._env.scene.env_origins
+        self._fly_focus = fly_origins[self._subject_index].detach().clone()
+        # Preserve the original user-configured framing and distance, only lowering it slightly.
+        self._final_offset = self._configured_eye - self._configured_lookat
+        self._final_offset[2] -= self._FLY_HEIGHT_REDUCTION
+        self._start_offset = self._final_offset.clone()
+        self._start_offset[:2] -= self._view_direction * self._START_BACK_DISTANCE
+        self._start_offset[2] += self._START_HEIGHT
+
+        self._approach_steps = max(1, round(video_length * self._FLYTHROUGH_FRACTION))
+        orbit_steps = max(1, video_length - self._approach_steps)
+        self._orbit_radians_per_step = self._ORBIT_ANGLE / orbit_steps
+
+        self._filtered_eye = None
+        self._filtered_lookat = None
+        if mode == "flythrough":
+            print(
+                f"[INFO] Camera mode 'flythrough' targeting the fixed center of environment "
+                f"{self._subject_index} (selected from the second-deepest centered robot)."
+            )
+        else:
+            selection_description = (
+                "second-deepest centered robot"
+                if self._chase_rotation
+                else "deepest centered robot with the remaining robots behind it"
+            )
+            print(
+                f"[INFO] Camera mode 'low_chase' tracking environment {self._subject_index} "
+                f"({selection_description}, rotation={'on' if self._chase_rotation else 'off'})."
+            )
+
+    def _select_subject(self) -> int:
+        """Select a deep robot inside an expanding center corridor for cinematic framing."""
+        positions = self._robot.data.root_pos_w[:, :2]
+        if positions.shape[0] == 1:
+            return 0
+
+        relative = positions - self._configured_eye[:2]
+        depth = relative @ self._view_direction
+        lateral = torch.abs(
+            relative[:, 0] * self._view_direction[1] - relative[:, 1] * self._view_direction[0]
+        )
+        in_front = depth > 0.0
+
+        candidates = torch.empty(0, device=positions.device, dtype=torch.long)
+        for corridor_half_width in (4.0, 8.0, 16.0, 32.0, float("inf")):
+            candidates = torch.nonzero(in_front & (lateral <= corridor_half_width), as_tuple=False).flatten()
+            if candidates.numel() >= 2:
+                break
+
+        if candidates.numel() == 0:
+            candidates = torch.arange(positions.shape[0], device=positions.device)
+
+        ordered = candidates[torch.argsort(depth[candidates], descending=True)]
+        use_deepest = self._mode == "low_chase" and not self._chase_rotation
+        selected_rank = 0 if use_deepest or ordered.numel() < 2 else 1
+        return int(ordered[selected_rank].item())
+
+    def _subject_position(self) -> torch.Tensor:
+        return self._robot.data.root_pos_w[self._subject_index].detach().clone()
+
+    def _subject_heading(self) -> torch.Tensor:
+        """Return the robot's planar +X body direction from its wxyz quaternion."""
+        quat = self._robot.data.root_quat_w[self._subject_index].detach()
+        w, x, y, z = quat.unbind()
+        heading = torch.stack((1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z)))
+        heading_norm = torch.linalg.vector_norm(heading)
+        if heading_norm.item() < 1.0e-6:
+            return self._view_direction.clone()
+        return heading / heading_norm
+
+    @staticmethod
+    def _smootherstep(value: float) -> float:
+        value = min(max(value, 0.0), 1.0)
+        return value * value * value * (value * (value * 6.0 - 15.0) + 10.0)
+
+    def _update_subject_filter(self):
+        raw_subject = self._subject_position()
+        if torch.linalg.vector_norm(raw_subject - self._filtered_subject).item() > self._TELEPORT_DISTANCE:
+            self._filtered_subject = raw_subject
+            if self._chase_rotation:
+                self._filtered_heading = self._subject_heading()
+            self._filtered_eye = None
+            self._filtered_lookat = None
+            return
+
+        self._filtered_subject.lerp_(raw_subject, self._filter_alpha)
+        if not self._chase_rotation:
+            return
+        raw_heading = self._subject_heading()
+        self._filtered_heading.lerp_(raw_heading, self._filter_alpha)
+        heading_norm = torch.linalg.vector_norm(self._filtered_heading)
+        if heading_norm.item() > 1.0e-6:
+            self._filtered_heading /= heading_norm
+
+    def _flythrough_pose(self, timestep: int) -> tuple[torch.Tensor, torch.Tensor]:
+        focus = self._fly_focus.clone()
+        focus[2] += self._FLY_FOCUS_HEIGHT
+
+        if timestep <= self._approach_steps:
+            approach_progress = timestep / self._approach_steps
+            forward_progress = self._smootherstep(approach_progress)
+            descent_progress = self._smootherstep(
+                min(approach_progress / self._DESCENT_FRACTION, 1.0)
+            )
+            offset = self._start_offset.clone()
+            offset[:2] = torch.lerp(
+                self._start_offset[:2], self._final_offset[:2], forward_progress
+            )
+            offset[2] = torch.lerp(
+                self._start_offset[2], self._final_offset[2], descent_progress
+            )
+        else:
+            angle = (timestep - self._approach_steps) * self._orbit_radians_per_step
+            cos_angle = math.cos(angle)
+            sin_angle = math.sin(angle)
+            offset = self._final_offset.clone()
+            offset_x = self._final_offset[0] * cos_angle - self._final_offset[1] * sin_angle
+            offset_y = self._final_offset[0] * sin_angle + self._final_offset[1] * cos_angle
+            offset[0] = offset_x
+            offset[1] = offset_y
+        return focus + offset, focus
+
+    def _low_chase_pose(self) -> tuple[torch.Tensor, torch.Tensor]:
+        desired_eye = self._filtered_subject.clone()
+        desired_lookat = self._filtered_subject.clone()
+        if self._chase_rotation:
+            # Front-left three-quarter view, expressed in the robot's planar frame.
+            left_direction = torch.stack((-self._filtered_heading[1], self._filtered_heading[0]))
+            desired_eye[:2] += self._filtered_heading * self._CHASE_DISTANCE
+            desired_eye[:2] += left_direction * self._CHASE_SIDE_OFFSET
+            desired_lookat[:2] += self._filtered_heading * self._CHASE_LOOK_AHEAD
+        else:
+            # Stay beyond the subject and look back across the rest of the robot field.
+            desired_eye[:2] += self._fixed_chase_offset
+        desired_eye[2] += self._CHASE_HEIGHT
+
+        desired_lookat[2] += 0.25
+
+        if self._filtered_eye is None:
+            self._filtered_eye = desired_eye
+            self._filtered_lookat = desired_lookat
+        else:
+            self._filtered_eye.lerp_(desired_eye, self._filter_alpha)
+            self._filtered_lookat.lerp_(desired_lookat, self._filter_alpha)
+        return self._filtered_eye, self._filtered_lookat
+
+    def update(self, timestep: int):
+        """Update the viewport before the environment renders its next step."""
+        if self._mode == "flythrough":
+            eye, lookat = self._flythrough_pose(timestep)
+        else:
+            self._update_subject_filter()
+            eye, lookat = self._low_chase_pose()
+        self._env.sim.set_camera_view(eye=eye.cpu().tolist(), target=lookat.cpu().tolist())
 
 
 def _flatten_observation(value) -> list[float]:
@@ -295,6 +527,9 @@ def main():
     if hasattr(env_cfg, "viewer"):
         env_cfg.viewer.eye = list(args_cli.camera_eye)
         env_cfg.viewer.lookat = list(args_cli.camera_lookat)
+        if args_cli.camera_mode in ("flythrough", "low_chase") and hasattr(env_cfg.viewer, "origin_type"):
+            # The cinematic controller supplies world-space poses every step.
+            env_cfg.viewer.origin_type = "world"
         if args_cli.camera_mode == "follow":
             follow_attr_candidates = [
                 "follow_prim_path",
@@ -341,7 +576,7 @@ def main():
         _rotate_existing_video_file(Path(video_folder) / "rl-video-step-0.meta.json")
         video_kwargs = {
             "video_folder": video_folder,
-            "step_trigger": lambda step: step == 1,
+            "step_trigger": _record_video_once,
             "video_length": args_cli.video_length,
             "disable_logger": True,
         }
@@ -354,11 +589,14 @@ def main():
     env.unwrapped.print_foot_force = True
     try:
         env.unwrapped.scene["cube"]
-        record_high_level_observations = True
+        is_push_task = True
     except KeyError:
-        record_high_level_observations = False
+        is_push_task = False
+    record_high_level_observations = args_cli.record_high_level_observations and is_push_task
+    if args_cli.record_high_level_observations and not is_push_task:
+        print("[WARN] --record_high_level_observations ignored: this task has no cube.")
     # Non-push tasks keep the existing observation-level foot-force recorder.
-    env.unwrapped.record_foot_force = not record_high_level_observations
+    env.unwrapped.record_foot_force = not is_push_task
     env.unwrapped.foot_force_record_path = os.path.join(
         log_dir, "recordings", "play", f"recording_{recording_timestamp}.csv"
     )
@@ -367,7 +605,11 @@ def main():
         env.unwrapped._play_record_sample = 0
         env.unwrapped._play_record_dt = env.unwrapped.physics_dt * high_level_action.cfg.low_level_decimation
         env.unwrapped._play_record_callback = lambda: _record_high_level_observations(env)
-    print(f"[INFO]: Recording play observations to: {env.unwrapped.foot_force_record_path}")
+        print(f"[INFO]: Recording high-level play observations to: {env.unwrapped.foot_force_record_path}")
+    elif env.unwrapped.record_foot_force:
+        print(f"[INFO]: Recording foot-force observations to: {env.unwrapped.foot_force_record_path}")
+    else:
+        print("[INFO]: High-level play observation recording is disabled.")
 
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
@@ -417,17 +659,32 @@ def main():
     if version("rsl-rl-lib").startswith("2.3."):
         obs, _ = env.get_observations()
     timestep = 0
+    camera_controller = None
+    if args_cli.camera_mode in ("flythrough", "low_chase"):
+        camera_controller = _CinematicCameraController(
+            env=env,
+            mode=args_cli.camera_mode,
+            eye=args_cli.camera_eye,
+            lookat=args_cli.camera_lookat,
+            video_length=args_cli.video_length,
+            dt=dt,
+            chase_rotation=args_cli.chase_rotation == "on",
+        )
+        camera_controller.update(timestep)
+
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
+            if camera_controller is not None:
+                camera_controller.update(timestep)
             # agent stepping
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+        timestep += 1
         if args_cli.video:
-            timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
