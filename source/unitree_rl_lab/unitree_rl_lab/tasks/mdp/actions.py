@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import torch
@@ -58,6 +59,36 @@ class DelayedJointPositionActionCfg(JointPositionActionCfg):
     class_type: type[ActionTerm] = DelayedJointPositionAction
     min_delay: int = 0
     max_delay: int = 2
+
+
+class InitialHoldJointPositionAction(JointPositionAction):
+    """Hold default joint targets briefly after every reset before accepting policy actions."""
+
+    cfg: InitialHoldJointPositionActionCfg
+
+    def __init__(self, cfg: InitialHoldJointPositionActionCfg, env):
+        if cfg.hold_duration_s < 0.0:
+            raise ValueError("hold_duration_s must be non-negative")
+        super().__init__(cfg, env)
+        self._hold_steps = int(math.ceil(cfg.hold_duration_s / env.step_dt))
+
+    def process_actions(self, actions: torch.Tensor):
+        super().process_actions(actions)
+        hold_mask = self._env.episode_length_buf < self._hold_steps
+        if torch.any(hold_mask):
+            self._raw_actions[hold_mask] = 0.0
+            if isinstance(self._offset, torch.Tensor):
+                self._processed_actions[hold_mask] = self._offset[hold_mask]
+            else:
+                self._processed_actions[hold_mask] = self._offset
+
+
+@configclass
+class InitialHoldJointPositionActionCfg(JointPositionActionCfg):
+    """Configuration for a default-pose hold at the beginning of each episode."""
+
+    class_type: type[ActionTerm] = InitialHoldJointPositionAction
+    hold_duration_s: float = 0.3
 
 
 class ResettablePreTrainedPolicyAction(PreTrainedPolicyAction):

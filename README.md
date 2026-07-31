@@ -110,6 +110,9 @@ python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --num_envs 16
 ```bash
 python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --headless --logger wandb --video --video_interval 75 --video_length 300 --log_project_name f_lightswitch_test --run_name test_1
 ```
+
+For the task phases, observations, complete reward overview, curriculum, and
+diagnostics, see [LIGHTSWITCH_TRAINING.md](LIGHTSWITCH_TRAINING.md).
   
 
 ## Play/Inference

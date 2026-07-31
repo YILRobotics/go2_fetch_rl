@@ -204,8 +204,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env_cfg.viewer.eye = [-60.0, 0.0, 7.0]
             env_cfg.viewer.lookat = [0.0, 0.0, -14]
         elif args_cli.task == "Unitree-Go2-LightSwitch-4L":
-            env_cfg.viewer.eye = [-50.0, -25.0, 5.0]
-            env_cfg.viewer.lookat = [0.0, 0.0, -7]
+            # View from the robot-facing side of the wall so the rocker contact,
+            # crouch, and landing remain visible instead of showing the wall back.
+            env_cfg.viewer.eye = [-2.2, 1.6, 1.6]
+            env_cfg.viewer.lookat = [0.35, 0.0, 0.32]
         else:
             env_cfg.viewer.eye = [-55.0, -25.0, 10.0]
             env_cfg.viewer.lookat = [0.0, 0.0, -15]

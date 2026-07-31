@@ -1033,3 +1033,5 @@ class RobotPushPlayEnvCfg(RobotPushEnvCfg):
             self.events.reset_robot_and_cube.params["joint_velocity_range"] = (-1.0, 1.0)
             self.events.reset_robot_joints.func = push_mdp.no_op_reset
             self.events.reset_robot_joints.params = {}
+
+python scripts/rsl_rl/train.py --task Unitree-Go2-LightSwitch-4L --headless --logger wandb --video --video_interval 100 --video_length 300 --log_project_name f_lightswitch_test --run_name 3_22
