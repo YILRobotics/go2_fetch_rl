@@ -1,11 +1,17 @@
 # Go2 Fechrobot RL with IsaacSim/Lab
 
 <p align="center">
-  <a href="https://yilrobotics.github.io/go2_fetch_rl/">
+  <a href="https://ferdinandhartmann.github.io/go2_fetch_rl/">
     <strong>🌐 View the Project Website</strong><br>
-    https://yilrobotics.github.io/go2_fetch_rl/
+    https://ferdinandhartmann.github.io/go2_fetch_rl/
+  </a>
+  <br><br>
+  <a href="https://github.com/ferdinandhartmann/go2_fetch_ros2">
+    <strong>🧠 Deploy Repository (ROS2)</strong><br>
+    github.com/ferdinandhartmann/go2_fetch_ros2
   </a>
 </p>
+
 
 ## Policy Demonstrations
 
