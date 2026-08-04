@@ -251,8 +251,13 @@ h1 span {
     font-weight: 650;
 }
 
-.authors span {
+.author-separator {
     padding-inline: 0.35em;
+    color: #9aa7b8;
+}
+
+.contributor-mark {
+    padding-left: 0.08em;
     color: #9aa7b8;
 }
 
@@ -1431,15 +1436,13 @@ footer {
         font-size: 1.08rem;
     }
 
-    .authors span {
-        display: block;
-        height: 0;
-        overflow: hidden;
-    }
-
     .authors {
         display: grid;
         gap: 1px;
+    }
+
+    .author-separator {
+        display: none;
     }
 
     .credit-note {
