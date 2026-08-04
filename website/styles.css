@@ -865,6 +865,63 @@ h1 span {
 }
 
 /* Tracking */
+.tracking-overview {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+    align-items: center;
+    gap: clamp(32px, 4vw, 56px);
+}
+
+.tracking-overview .tracking-intro {
+    font-size: clamp(1rem, 1.25vw, 1.14rem);
+    line-height: 1.75;
+}
+
+.tracking-camera {
+    position: relative;
+    width: 100%;
+    max-width: 440px;
+    justify-self: end;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--white);
+    box-shadow: 0 18px 45px rgba(20, 38, 63, 0.12);
+}
+
+.tracking-camera::before {
+    position: absolute;
+    z-index: 1;
+    inset: 0 auto 0 0;
+    width: 4px;
+    background: var(--accent);
+    content: "";
+}
+
+.tracking-camera img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 3 / 2;
+    object-fit: cover;
+}
+
+.tracking-camera figcaption {
+    padding: 14px 18px 16px 21px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.tracking-camera figcaption span {
+    display: inline-block;
+    margin-right: 7px;
+    color: var(--accent-dark);
+    font-size: 0.68rem;
+    font-weight: 780;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
 .tracking-pipeline {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1369,6 +1426,20 @@ footer {
     .tracking-pipeline {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 28px 0;
+    }
+
+    .tracking-overview {
+        grid-template-columns: 1fr;
+        gap: 24px;
+    }
+
+    .tracking-camera {
+        max-width: 520px;
+        justify-self: start;
+    }
+
+    .tracking-overview .tracking-intro {
+        max-width: 760px;
     }
 
     .tracking-pipeline li:nth-child(2) {
