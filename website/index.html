@@ -13,12 +13,10 @@
     <aside class="page-toc" aria-label="Page contents">
         <p class="toc-title">Contents</p>
         <nav>
-            <a href="#overview">Overview</a>
             <a href="#architecture">Architecture</a>
             <a href="#training">Training</a>
             <a href="#perception">Cube tracking</a>
             <a href="#deployment">Deployment</a>
-            <a href="#futurework">Future Work</a>
         </nav>
     </aside>
 
@@ -26,8 +24,8 @@
         <div class="shell header-inner">
             <h1>Go2 <span>Fetch</span></h1>
             <p class="subtitle">Hierarchical Reinforcement Learning for Autonomous Object Pushing</p>
-            <p class="authors">Ferdinand Hartmann<span aria-hidden="true">*</span> <span aria-hidden="true">·</span> Alessandro Baschiera</p>
-            <p class="credit-note">* Primary contributor.</p>
+            <p class="authors">Ferdinand Hartmann<span aria-hidden="true">*</span> <span aria-hidden="true">·</span>  Alessandro Baschiera</p>
+            <p class="credit-note">* Primary contributor</p>
             <nav class="project-links" aria-label="Project repositories">
                 <a class="pill" href="https://github.com/YILRobotics/go2_fetch_rl" target="_blank" rel="noopener noreferrer">
                     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 .7a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.2.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.2 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C15 4.7 16 5 16 5c.6 1.6.2 2.9.1 3.2.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 12 .7Z"/></svg>
@@ -45,12 +43,10 @@
         <details>
             <summary>On this page</summary>
             <div class="mobile-toc-links">
-                <a href="#overview">Overview</a>
                 <a href="#architecture">Architecture</a>
                 <a href="#training">Training</a>
-                <a href="#perception">Tracking</a>
+                <a href="#perception">Cube Tracking</a>
                 <a href="#deployment">Deployment</a>
-                <a href="#futurework">Future Work</a>
             </div>
         </details>
     </nav>
@@ -67,17 +63,12 @@
             </figure>
         </section>
 
-        <section class="tldr" aria-labelledby="tldr-title">
-            <h2 id="tldr-title" class="visually-hidden">Project summary</h2>
-            <p>We trained a Unitree Go2 to find a cube, move behind it, and push it into a goal. A high-level policy decides how the robot should move; a separate locomotion policy turns that command into stable locomotion. The real system connects both policies to camera-based tracking, state estimation with ROS 2.</p>
-        </section>
-
         <section class="hero-system" aria-label="Go2 Fetch at a glance">
             <div class="hero-stage hero-stage-sense">
                 <span class="stage-index">01</span>
                 <p class="stage-label">Perceive</p>
                 <h2>Find and track the cube</h2>
-                <p>Cube position from open-vocabulary segmentation and point-cloud and raw point-cloud tracking combined in an EKF track the cube's position and velocity.</p>
+                <p>YOLOE segmentation and point-cloud tracking are fused in an EKF to estimate cube position and velocity.</p>
                 <span class="stage-rate">10 / 30 Hz</span>
             </div>
             <span class="hero-arrow" aria-hidden="true">→</span>
@@ -85,7 +76,7 @@
                 <span class="stage-index">02</span>
                 <p class="stage-label">Decide</p>
                 <h2>Choose a body velocity</h2>
-                <p>The pushing policy combines proprioception, odometry, cube position, and the selected goal position.</p>
+                <p>The high-level pushing policy combines proprioception, odometry, cube position, and the selected goal position.</p>
                 <span class="stage-rate">10 Hz</span>
             </div>
             <span class="hero-arrow" aria-hidden="true">→</span>
@@ -93,31 +84,14 @@
                 <span class="stage-index">03</span>
                 <p class="stage-label">Move</p>
                 <h2>Execute stable locomotion</h2>
-                <p>The low-level policy converts the requested velocity command into twelve joint position targets.</p>
+                <p>The low-level locomotion policy converts the requested velocity command into twelve joint position targets.</p>
                 <span class="stage-rate">50 Hz</span>
             </div>
         </section>
 
-        <section id="overview" class="content-section">
-            <div class="section-heading">
-                <p class="section-number">01</p>
-                <h2>Why a Hierarchy?</h2>
-            </div>
-            <div class="prose-columns">
-                <p>Pushing an object looks requires stable locomotion and manipulation at the same time. The robot must keep its balance, maintain the cube in view, approach it from a useful direction, and still make progress toward a goal.</p>
-                <p>Those responsibilities are separated: the locomotion policy delivers stable locomotion at high frequency, while the pushing policy can work at a slower rate and command the velocities with input of cube and goal position.</p>
-            </div>
-            <dl class="frequency-strip" aria-label="System update frequencies">
-                <div><dt>10 Hz</dt><dd><span>YOLOE segmentation</span><span>&amp; pushing policy</span></dd></div>
-                <div><dt>30 Hz</dt><dd>Point-cloud tracker</dd></div>
-                <div><dt>50 Hz</dt><dd>Locomotion policy</dd></div>
-                <div><dt>500 Hz</dt><dd>Robot state and InEKF</dd></div>
-            </dl>
-        </section>
-
         <section id="architecture" class="content-section">
             <div class="section-heading">
-                <p class="section-number">02</p>
+                <p class="section-number">01</p>
                 <h2>System Architecture</h2>
             </div>
             <div class="architecture" role="img" aria-label="Architecture flow from RealSense and robot sensors through tracking and state estimation, into the high-level and low-level policies, and finally to the Go2 motors">
@@ -125,10 +99,10 @@
                     <p class="architecture-label">Sensors</p>
                     <article class="architecture-node">
                         <span>RGB & Point Cloud</span>
-                        <strong>RealSense D346</strong>
+                        <strong>RealSense D435</strong>
                     </article>
                     <article class="architecture-node">
-                        <span>IMU · joints · foot-sensors</span>
+                        <span>IMU · joints · foot sensors</span>
                         <strong>Unitree LowState</strong>
                     </article>
                 </div>
@@ -165,13 +139,12 @@
                     </article>
                 </div>
             </div>
-            <p class="diagram-note">...</p>
         </section>
 
         <section id="training" class="content-section">
             <div class="section-heading">
-                <p class="section-number">03</p>
-                <h2>Two Stage Training</h2>
+                <p class="section-number">02</p>
+                <h2>Two-Stage Training</h2>
             </div>
             <div class="demo-grid training-demo-grid" aria-label="Training recordings">
                 <figure class="demo-card">
@@ -193,25 +166,24 @@
                     <figcaption><strong>High-level object pushing.</strong> The policy approaches, aligns, and moves the cube toward the marked goal.</figcaption>
                 </figure>
             </div>
-            <p class="training-intro">Both policies were trained with PPO in Isaac Lab. First a general velocity-tracking policy was trained and then this exported policy was embedded inside the pushing environment. During the second stage, the high-level policy learns to use the locomotion controller to solve the pushing task.</p>
             <div class="stage-grid">
                 <article class="training-card">
                     <div class="card-topline"><span>Stage 1</span></div> <!-- <span>4,096 environments</span></div>-->
                     <h3>Velocity tracking</h3>
-                    <p>The Go2 follows forward, lateral, and yaw commands over varied terrain. Rewards favor velocity tracking and stable, energy-conscious gait behavior while penalizing falls, sliding, joint-limit violations, and abrupt actions.</p>
+                    <p>Tracks forward, lateral, and yaw commands while maintaining a stable, efficient gait.</p>
                     <dl>
                         <div><dt>Policy rate</dt><dd>50 Hz</dd></div>
-                        <div><dt>Input</dt><dd>52 dim observation</dd></div>
+                        <div><dt>Input</dt><dd>49-dimensional observation</dd></div>
                         <div><dt>Output</dt><dd>12 joint actions</dd></div>
                     </dl>
                 </article>
                 <article class="training-card training-card-accent">
                     <div class="card-topline"><span>Stage 2</span></div>  <!-- <span>6,144 environments</span></div>-->
                     <h3>Cube pushing</h3>
-                    <p>The policy learns to approach the cube, align behind it, push toward the goal, and stop with the cube settled inside. The frozen locomotion model executes every velocity command inside the environment.</p>
+                    <p>Approaches the cube, aligns behind it, and pushes it into the goal using the frozen locomotion policy.</p>
                     <dl>
                         <div><dt>Policy rate</dt><dd>10 Hz</dd></div>
-                        <div><dt>Input</dt><dd>49 dim observation</dd></div>
+                        <div><dt>Input</dt><dd>52-dimensional observation</dd></div>
                         <div><dt>Output</dt><dd>3 velocity commands</dd></div>
                     </dl>
                 </article>
@@ -226,11 +198,11 @@
                     <p>Robot and cube mass, friction, motor gains, cube scale, spawn geometry, and floor properties are randomized. Cube observations also receive delay, Gaussian noise, dropout, and occasional spikes.</p>
                 </div>
             </div>
-            <p class="policy-intro">The interface between the two policies is intentionally small. The high-level network produces a desired body velocity; the low-level network receives that command alongside fast proprioceptive feedback. The latest high-level command is held between its 10 Hz updates while locomotion continues at 50 Hz.</p>
+            <p class="policy-intro">The high-level policy sends body-velocity commands at 10 Hz; the low-level policy converts them into joint targets at 50 Hz.</p>
             <div class="policy-stack">
                 <article class="policy-card policy-high">
                     <div class="policy-heading">
-                        <div><p class="card-label">High level · PushCube</p><h3>Where should the body move?</h3></div>
+                        <div><p class="card-label">High-level · PushCube</p><h3>Where should the body move?</h3></div>
                         <span class="io-badge">52 → 3</span>
                     </div>
                     <div class="observation-groups">
@@ -241,7 +213,7 @@
                 <div class="stack-link" aria-hidden="true"><b>↓</b><span>velocity command at 10 Hz</span><b>↓</b></div>
                 <article class="policy-card policy-low">
                     <div class="policy-heading">
-                        <div><p class="card-label">Low level · Locomotion</p><h3>How should the legs execute it?</h3></div>
+                        <div><p class="card-label">Low-level · Locomotion</p><h3>How should the legs execute it?</h3></div>
                         <span class="io-badge">49 → 12</span>
                     </div>
                     <div class="observation-groups">
@@ -254,14 +226,14 @@
 
         <section id="perception" class="content-section">
             <div class="section-heading">
-                <p class="section-number">04</p>
+                <p class="section-number">03</p>
                 <h2>Cube Tracking</h2>
             </div>
             <div class="tracking-overview">
                 <p class="tracking-intro">A single vision method was not reliable enough for the control loop. YOLOE gives a strong semantic detection but is comparatively slow. Raw point-cloud tracking can update more frequently, but sometimes tracks wrong objects.</p>
                 <figure class="tracking-camera">
                     <img src="./assets/fetch_cameramount_1.jpg" alt="Close-up of the RGB-D camera mounted beneath the Unitree Go2 robot" loading="lazy" decoding="async">
-                    <figcaption><span>Custom Camera Mount:</span>To get the best view of the cube a custom mount was designed with protection in mind.</figcaption>
+                    <figcaption><span>Custom Camera Mount:</span>To get the best view of the cube a custom mount was designed with protection in case of a fall in mind.</figcaption>
                 </figure>
             </div>
             <ol class="tracking-pipeline" aria-label="Cube tracking pipeline">
@@ -310,7 +282,7 @@
 
         <section id="deployment" class="content-section">
             <div class="section-heading">
-                <p class="section-number">05</p>
+                <p class="section-number">04</p>
                 <h2>From Sim to Real</h2>
             </div>
             <div class="deployment-grid">
@@ -322,42 +294,27 @@
                 <article>
                     <p class="card-label">Policy runtime</p>
                     <h3>ROS 2 and TensorRT</h3>
-                    <p>The policies are exported to TensorRT engine files and run in separate C++ nodes. The low-level node also includes the stand-up sequence, command timeout, torque limiting, and publication of Unitree motor commands.</p>
+                    <p>Policies run as separate C++ ROS 2 nodes using TensorRT. The low-level node handles standing, timeouts, torque limits, and motor commands. For testing, the high-level policy can also use Unitree's built-in controller.</p>
                 </article>
             </div>
-            <div class="interaction-grid">
-                <article>
-                    <span class="button-chip">Y</span>
-                    <h3>Set the goal</h3>
-                    <p>The goal position is set to the current robot position.</p>
-                </article>
-                <article>
-                    <span class="button-chip">B</span>
-                    <h3>Recover the cube</h3>
-                    <p>If tracking is lost, commands ramp downa and recovery rotates toward the last known bearing until YOLO sees the cube again. This can also be set to automatic.</p>
-                </article>
-                <article>
-                    <span class="button-chip">✓</span>
-                    <h3>Finish safely</h3>
-                    <p>The policy stops after the cube remains inside the target for the hold time and the robot has moved clear of the goal area.</p>
-                </article>
-            </div>
+            <article class="remote-control-card">
+                <div class="remote-control-heading">
+                    <p class="card-label">Operator controls</p>
+                    <h3>Remote control</h3>
+                    <p>The complete deployment can be operated from the handheld controller.</p>
+                </div>
+                <ul class="control-list">
+                    <li><kbd class="button-chip button-chip-wide">Start</kbd><span><strong>Stand up</strong>Moves the robot from its damping pose into the standing position.</span></li>
+                    <li><kbd class="button-chip">A</kbd><span><strong>Enable low-level policy</strong>Runs the locomotion policy with velocity commands from the joysticks or the high-level policy.</span></li>
+                    <li><kbd class="button-chip">X</kbd><span><strong>Start or pause high-level policy</strong>Toggles autonomous cube pushing.</span></li>
+                    <li><kbd class="button-chip">Y</kbd><span><strong>Set the goal</strong>Uses the robot's current position as the goal.</span></li>
+                    <li><kbd class="button-chip button-chip-wide">Select</kbd><span><strong>Emergency stop</strong>Stops control immediately and returns the robot to its damping position.</span></li>
+                </ul>
+                <p class="automatic-finish"><strong>Automatic finish:</strong> The policy stops after the cube remains inside the target and the robot has moved clear.</p>
+            </article>
+            <p class="future-note"><strong>Future work:</strong> Extend the system to new object shapes and more dynamic tasks.</p>
         </section>
 
-        <section id="futurework" class="content-section">
-            <div class="section-heading">
-                <p class="section-number">06</p>
-                <h2>Future Work</h2>
-            </div>
-            <ul class="futurework-list">
-                <li>Extend the tracker to different objects and object shapes beyond the cube setup used here.</li>
-                <li>Adapt the perception and control stack to more dynamic objects that move faster or change direction more often.</li>
-            </ul>
-            <!-- <div class="acknowledgement">
-                <p class="card-label">Acknowledgements</p>
-                <p>This project builds on NVIDIA Isaac Lab, RSL-RL, Unitree’s Go2 interfaces, Ultralytics YOLOE, the Point Cloud Library, and NVIDIA TensorRT. Robot state estimation is based on the INRIA Paris Robotics Lab <a href="https://github.com/inria-paris-robotics-lab/go2_odometry" target="_blank" rel="noopener noreferrer">Go2 odometry</a> and <a href="https://github.com/inria-paris-robotics-lab/invariant-ekf" target="_blank" rel="noopener noreferrer">Invariant EKF</a> projects.</p>
-            </div> -->
-        </section>
     </main>
 
     <footer>
