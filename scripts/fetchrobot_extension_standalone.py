@@ -201,7 +201,7 @@ class FetchRobotGuiScene:
         self.world.reset()
 
 
-# Convenience: run once when executed.
+# Convenience: run once when executed
 _URDF_PATH = os.environ.get(
     "GO2_URDF_PATH",
     "/home/ferdinand/fetchrobot/unitree_ros/robots/go2_description/urdf/go2_description.urdf",
